@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "watson-triage"
+version = "0.2.0"
+description = "Evidence-based GitHub issue triage, persistent memory and Plow delivery."
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = []
+
+[project.optional-dependencies]
+browser = ["playwright==1.63.0", "imageio-ffmpeg==0.6.0"]
+
+[project.scripts]
+watson = "watson.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["watson*"]
+
+[tool.setuptools.package-data]
+"watson.vendor" = ["NOTICE", "LICENSE-agent-index"]

@@ -1,0 +1,20 @@
+{
+  "browser_profiles": {
+    "1": {
+      "test_environment": true,
+      "source_sha": "REPLACE_WITH_DEPLOYED_40_CHARACTER_COMMIT",
+      "url": "http://127.0.0.1:38765",
+      "login": {
+        "username": "#email",
+        "password": "#password",
+        "submit": "#login-form button",
+        "ready": "#workspace"
+      },
+      "steps": [
+        {"action": "fill", "selector": "#title", "value": "   ", "description": "Enter a whitespace-only title"},
+        {"action": "click", "selector": "#ticket-form button", "description": "Submit the ticket"},
+        {"action": "expect_text", "selector": "#result", "value": "Title is required", "description": "Reject a whitespace-only title"}
+      ]
+    }
+  }
+}

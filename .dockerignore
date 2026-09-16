@@ -1,0 +1,10 @@
+.git
+.watson
+.venv
+__pycache__
+**/__pycache__
+*.egg-info
+.env
+plow-credentials
+auth.json
+tests

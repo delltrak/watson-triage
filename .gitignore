@@ -1,0 +1,13 @@
+.watson/
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.env
+plow-credentials
+auth.json
+*.sqlite*
+*.db
+.DS_Store
