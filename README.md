@@ -1,5 +1,7 @@
 # Watson
 
+Built by [Deltrak](https://github.com/delltrak).
+
 **Your assigned GitHub issues arrive investigated.**
 
 Watson reads an issue, its conversation, relevant source files and GitHub Actions results. It remembers earlier investigations, asks the author for missing information in the issue's language, and resumes when they reply. Owner updates are in Brazilian Portuguese over Plow/iMessage.
