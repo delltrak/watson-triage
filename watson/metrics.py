@@ -50,7 +50,7 @@ def index_client(home, *, register=False, dry_run=False):
     if register:
         command+=['--register','--name','Watson','--blurb','GitHub issues investigated with memory, test evidence, and iMessage updates. Never merges.',
                   '--repo',config['agent_repository_url'],'--runtime','Codex',
-                  '--install-url',config['agent_repository_url']+'#install']
+                  '--install-url',config.get('agent_install_url',config['agent_repository_url']+'/blob/main/README.md')]
     elif dry_run: command+=['--dry-run']
     result=subprocess.run(command,env=env,capture_output=True,text=True,timeout=120)
     if result.returncode: raise WatsonError('O cliente oficial do Agent Index falhou; nenhum sucesso foi presumido.')
