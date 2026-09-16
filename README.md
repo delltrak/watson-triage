@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/watson-agent-index-cover.png" alt="Watson — GitHub issues, investigated. Right in iMessage. Built with Plow." width="100%">
+</p>
+
 # Watson
 
 Built by [Deltrak](https://github.com/delltrak).
