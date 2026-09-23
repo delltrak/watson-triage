@@ -5,7 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from watson.core import Store, WatsonError, parse_issue_ref, private_json, resolve_issue_number
+from watson.core import Store, WatsonError, private_json
+from watson.issue_ref import parse_issue_ref, resolve_issue_number
 from watson.mcp import dispatch, serve
 
 
