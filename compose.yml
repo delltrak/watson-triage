@@ -10,9 +10,9 @@ services:
       # GitHub para o agente (GH_TOKEN=...). Arquivo gitignored; optional until connected.
       - path: ${GITHUB_CREDENTIALS:-./github-credentials}
         required: false
-    environment:
-      # Host export also works: GH_TOKEN=... docker compose up
-      GH_TOKEN: ${GH_TOKEN:-}
+    # GH_TOKEN comes from github-credentials (env_file above).
+    # Do not add `GH_TOKEN: ${GH_TOKEN:-}` here — an empty host value would
+    # override the file and clear auth inside the container.
     volumes:
       # Home Hermes: sessões, config e estado Watson em /var/lib/hermes/watson.
       - agent-home:/var/lib/hermes

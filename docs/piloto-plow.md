@@ -143,7 +143,7 @@ honesto e pede para conectar.
 |---|---|---|
 | Credencial da linha Plow | `plow-credentials` ou `PLOW_CREDENTIALS` | Escopo da linha; mint/rotate via plow-agents |
 | Home Hermes + Watson | volume Docker `agent-home` → `/var/lib/hermes` | Estado em `/var/lib/hermes/watson` |
-| GitHub (`GH_TOKEN`) | `./github-credentials` (gitignore) ou env `GH_TOKEN` | Ver seção abaixo; nunca commitar |
+| GitHub (`GH_TOKEN`) | `./github-credentials` (gitignore) | Ver seção abaixo; nunca commitar |
 | Codex | ambiente do container / login local | Necessário para inferência da investigação |
 
 ## Referências
