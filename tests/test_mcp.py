@@ -14,7 +14,8 @@ from watson.capabilities import (
 )
 from watson.core import Store, WatsonError, private_json
 from watson.issue_ref import parse_issue_ref, resolve_issue_number, resolve_issue_ref
-from watson.mcp import dispatch, serve
+from watson.mcp import TOOLS, dispatch, serve
+from watson.oauth_connect import _parse_claude, _parse_codex, _strip_ansi
 
 
 class IssueRefTests(unittest.TestCase):
@@ -161,6 +162,8 @@ class CapabilityTests(unittest.TestCase):
         self.assertIn('draft PR', text)
         self.assertIn('/help', text)
         self.assertIn('Nunca faço merge', text)
+        self.assertIn('pede pra conectar aqui no chat', text)
+        self.assertNotIn('conectar uma vez nesta linha', text)
 
 
 class MCPTests(unittest.TestCase):
@@ -194,7 +197,10 @@ class MCPTests(unittest.TestCase):
         self.assertEqual(len(messages), 3)
         self.assertEqual(messages[0]['result']['protocolVersion'], '2025-06-18')
         tools = {t['name']: t for t in messages[1]['result']['tools']}
-        self.assertEqual(set(tools), {'watson_status', 'watson_investigate'})
+        self.assertEqual(set(tools), {
+            'watson_status', 'watson_investigate',
+            'watson_connect_codex', 'watson_connect_claude',
+        })
         props = tools['watson_investigate']['inputSchema']['properties']
         self.assertIn('issue', props)
         self.assertIn('number', props)
@@ -401,6 +407,155 @@ class MCPTests(unittest.TestCase):
             with self.assertRaises(WatsonError) as ctx:
                 require_github(language='pt')
         self.assertIn('O GitHub ainda não está conectado', str(ctx.exception))
+
+
+
+class OAuthConnectParseTests(unittest.TestCase):
+    def test_strip_ansi_and_parse_codex_device_output(self):
+        raw = (
+            'Welcome\n'
+            '\x1b[94mhttps://auth.openai.com/codex/device\x1b[0m\n'
+            'Enter this one-time code\n'
+            '\x1b[94mTRWW-KJ1JA\x1b[0m\n'
+        )
+        clean = _strip_ansi(raw)
+        self.assertNotIn('\x1b', clean)
+        url, code = _parse_codex(raw)
+        self.assertEqual(url, 'https://auth.openai.com/codex/device')
+        self.assertEqual(code, 'TRWW-KJ1JA')
+
+    def test_parse_claude_oauth_url(self):
+        raw = (
+            'Opening browser to sign in…\n'
+            'If the browser didn\'t open, visit: '
+            'https://claude.com/cai/oauth/authorize?code=true&client_id=abc&'
+            'redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback\n'
+            'Paste code here if prompted > '
+        )
+        url = _parse_claude(raw)
+        self.assertTrue(url.startswith('https://claude.com/cai/oauth/authorize'))
+        self.assertIn('platform.claude.com', url)
+
+
+class OAuthConnectToolTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.home = Path(self.temp.name)
+        store = Store(self.home)
+        store.db.close()
+        private_json(self.home / 'config.json', {
+            'repository': 'demo/repo', 'assignee': 'owner', 'related_repositories': []})
+
+    def test_tools_list_includes_connect(self):
+        names = {t['name'] for t in TOOLS}
+        self.assertIn('watson_connect_codex', names)
+        self.assertIn('watson_connect_claude', names)
+
+    def test_connect_codex_already_authenticated(self):
+        with patch('watson.oauth_connect.check_codex', return_value={
+            'ok': True, 'reason': 'authenticated', 'connected': True,
+        }):
+            response = dispatch(self.home, {
+                'method': 'tools/call',
+                'params': {'name': 'watson_connect_codex', 'arguments': {'language': 'pt'}},
+            })
+        self.assertFalse(response['isError'], response)
+        payload = json.loads(response['content'][0]['text'])
+        self.assertTrue(payload['already_authenticated'])
+        self.assertIn('já está conectado', payload['message'])
+
+    def test_connect_codex_returns_url_from_started_login(self):
+        class FakeProc:
+            pid = 4242
+            stdin = None
+
+            def __init__(self, *a, **k):
+                pass
+
+        def fake_start(home, provider, cmd):
+            log = Path(home) / 'oauth' / f'{provider}.log'
+            log.parent.mkdir(parents=True, exist_ok=True)
+            log.write_text(
+                'Follow these steps\n'
+                'https://auth.openai.com/codex/device\n'
+                'Enter this one-time code\n'
+                'ABCD-EFGH1\n'
+            )
+            return FakeProc()
+
+        with patch('watson.oauth_connect.check_codex', return_value={
+            'ok': False, 'reason': 'not_authenticated', 'connected': False,
+        }), patch('watson.oauth_connect._start_process', side_effect=fake_start),              patch('watson.oauth_connect._pid_alive', return_value=True),              patch('watson.oauth_connect._spawn_stdin_holder'):
+            response = dispatch(self.home, {
+                'method': 'tools/call',
+                'params': {
+                    'name': 'watson_connect_codex',
+                    'arguments': {'language': 'en'},
+                },
+            })
+        self.assertFalse(response['isError'], response)
+        payload = json.loads(response['content'][0]['text'])
+        self.assertEqual(payload['status'], 'waiting_browser')
+        self.assertEqual(payload['auth_url'], 'https://auth.openai.com/codex/device')
+        self.assertEqual(payload['user_code'], 'ABCD-EFGH1')
+        self.assertIn('https://auth.openai.com/codex/device', payload['message'])
+        self.assertIn('ABCD-EFGH1', payload['message'])
+
+    def test_connect_claude_returns_url(self):
+        class FakeProc:
+            pid = 5252
+            stdin = type('S', (), {'close': lambda self: None, 'fileno': lambda self: 1})()
+
+            def __init__(self, *a, **k):
+                pass
+
+        def fake_start(home, provider, cmd):
+            log = Path(home) / 'oauth' / f'{provider}.log'
+            log.parent.mkdir(parents=True, exist_ok=True)
+            log.write_text(
+                'visit: https://claude.com/cai/oauth/authorize?code=true&x=1\n'
+                'Paste code here if prompted > '
+            )
+            return FakeProc()
+
+        with patch('watson.oauth_connect.check_claude', return_value={
+            'ok': False, 'reason': 'not_authenticated', 'connected': False,
+        }), patch('watson.oauth_connect._start_process', side_effect=fake_start),              patch('watson.oauth_connect._pid_alive', return_value=True),              patch('watson.oauth_connect._spawn_stdin_holder'):
+            response = dispatch(self.home, {
+                'method': 'tools/call',
+                'params': {
+                    'name': 'watson_connect_claude',
+                    'arguments': {'language': 'pt'},
+                },
+            })
+        self.assertFalse(response['isError'], response)
+        payload = json.loads(response['content'][0]['text'])
+        self.assertEqual(payload['status'], 'waiting_code')
+        self.assertTrue(payload['auth_url'].startswith('https://claude.com/'))
+        self.assertIn('https://claude.com/', payload['message'])
+        self.assertIn('código', payload['message'].lower())
+
+    def test_connect_claude_rejects_api_key_looking_code(self):
+        # Seed a pending session
+        oauth = self.home / 'oauth'
+        oauth.mkdir(parents=True, exist_ok=True)
+        (oauth / 'claude.json').write_text(json.dumps({
+            'provider': 'claude', 'pid': 999, 'status': 'waiting_code',
+            'auth_url': 'https://claude.com/x', 'needs_paste_code': True,
+        }))
+        with patch('watson.oauth_connect.check_claude', return_value={
+            'ok': False, 'reason': 'not_authenticated', 'connected': False,
+        }), patch('watson.oauth_connect._pid_alive', return_value=True):
+            response = dispatch(self.home, {
+                'method': 'tools/call',
+                'params': {
+                    'name': 'watson_connect_claude',
+                    'arguments': {'language': 'en', 'code': 'sk-ant-api03-secret'},
+                },
+            })
+        self.assertTrue(response['isError'])
+        self.assertIn('API key', response['content'][0]['text'])
 
 
 if __name__ == '__main__':

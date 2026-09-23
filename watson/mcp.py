@@ -1,4 +1,4 @@
-"""Small stdio MCP bridge. Exposes inspection only, never delivery or Git writes."""
+"""Small stdio MCP bridge. Inspection + chat-first OAuth connect; never delivery/Git writes."""
 from __future__ import annotations
 
 import json
@@ -11,6 +11,7 @@ from .capabilities import capabilities_report, normalize_language, require_codex
 from .core import Store, WatsonError, load_config
 from .issue_ref import resolve_issue_ref
 from .github import GitHub
+from .oauth_connect import connect_claude, connect_codex
 
 
 TOOLS = [
@@ -56,6 +57,61 @@ TOOLS = [
              'language': {
                  'type': 'string',
                  'description': 'Language for error/setup messages: en, pt, or auto.',
+             },
+         },
+         'additionalProperties': False,
+     }},
+    {'name': 'watson_connect_codex',
+     'description': 'Start Codex device-code login and return a clickable auth URL '
+                    '(+ one-time code) for the user to open on their phone. Use when '
+                    'the user asks to connect/login Codex. Relays over iMessage — '
+                    'paste auth_url plainly with https visible. Does not complete '
+                    'localhost-only OAuth. Safe to call twice (resumes or restarts). '
+                    'Pass cancel=true to abort a pending login. Never invent success; '
+                    'confirm later with watson_status.',
+     'inputSchema': {
+         'type': 'object',
+         'properties': {
+             'language': {
+                 'type': 'string',
+                 'description': 'Reply language: en, pt, or auto.',
+             },
+             'restart': {
+                 'type': 'boolean',
+                 'description': 'Force a new login even if one is already pending.',
+             },
+             'cancel': {
+                 'type': 'boolean',
+                 'description': 'Cancel any pending Codex login.',
+             },
+         },
+         'additionalProperties': False,
+     }},
+    {'name': 'watson_connect_claude',
+     'description': 'Start Claude Code remote browser login and return a clickable '
+                    'auth URL for iMessage. After the user signs in, they paste the '
+                    'browser code back in chat — call again with code= that value to '
+                    'finish. Use when the user asks to connect/login Claude. Paste '
+                    'auth_url plainly (https visible). Pass cancel=true to abort. '
+                    'Never invent success; confirm with watson_status.',
+     'inputSchema': {
+         'type': 'object',
+         'properties': {
+             'language': {
+                 'type': 'string',
+                 'description': 'Reply language: en, pt, or auto.',
+             },
+             'code': {
+                 'type': 'string',
+                 'description': 'Paste-code from the Claude browser page to finish login.',
+             },
+             'restart': {
+                 'type': 'boolean',
+                 'description': 'Force a new login even if one is already pending.',
+             },
+             'cancel': {
+                 'type': 'boolean',
+                 'description': 'Cancel any pending Claude login.',
              },
          },
          'additionalProperties': False,
@@ -149,6 +205,16 @@ def dispatch(home, message):
             raw = None
         elif name == 'watson_investigate':
             raw = _issue_argument(arguments)
+        elif name == 'watson_connect_codex':
+            extra = set(arguments) - {'language', 'restart', 'cancel'}
+            if extra:
+                raise WatsonError('Connect Codex only accepts language, restart, cancel.')
+            raw = None
+        elif name == 'watson_connect_claude':
+            extra = set(arguments) - {'language', 'code', 'restart', 'cancel'}
+            if extra:
+                raise WatsonError('Connect Claude only accepts language, code, restart, cancel.')
+            raw = None
         else:
             raise WatsonError('Tool not available.')
         store = Store(home)
@@ -157,6 +223,21 @@ def dispatch(home, message):
             if name == 'watson_status':
                 # Read-only: do not take the exclusive worker lock.
                 result = _status_result(store, language)
+            elif name == 'watson_connect_codex':
+                result = connect_codex(
+                    home,
+                    language=language,
+                    restart=bool(arguments.get('restart')),
+                    cancel=bool(arguments.get('cancel')),
+                )
+            elif name == 'watson_connect_claude':
+                result = connect_claude(
+                    home,
+                    language=language,
+                    code=arguments.get('code'),
+                    restart=bool(arguments.get('restart')),
+                    cancel=bool(arguments.get('cancel')),
+                )
             else:
                 with store.lock():
                     result = _investigate_result(home, store, config, raw, language)

@@ -1,5 +1,6 @@
 # Fragmento mesclado em config.yaml (seed + homes existentes).
-# Ponte stdio somente leitura: watson_status, watson_investigate.
+# Ponte stdio: watson_status, watson_investigate, watson_connect_codex,
+# watson_connect_claude (device/remote login URL no chat).
 # Sem envio Plow, sem escrita GitHub, sem merge via MCP.
 mcp_servers:
   watson:

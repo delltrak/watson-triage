@@ -64,12 +64,12 @@ _CODEX_MISSING = {
 
 _CODEX_LOGIN = {
     'en': (
-        'Codex CLI is installed but not logged in yet. The owner needs to connect '
-        'Codex once on this line (local login), then ask me again.'
+        'Codex CLI is installed but not logged in yet. Ask me to connect Codex '
+        'here in chat and I will send you a link.'
     ),
     'pt': (
-        'O Codex CLI está instalado, mas ainda sem login. O dono precisa conectar '
-        'o Codex uma vez nesta linha (login local) e me pedir de novo.'
+        'O Codex CLI está instalado, mas ainda sem login. Pede pra conectar o '
+        'Codex aqui no chat que eu te mando o link.'
     ),
 }
 
@@ -80,12 +80,12 @@ _CLAUDE_MISSING = {
 
 _CLAUDE_LOGIN = {
     'en': (
-        'Claude Code CLI is installed but not logged in yet. The owner needs to '
-        'connect Claude once on this line (local login), then ask me again.'
+        'Claude Code CLI is installed but not logged in yet. Ask me to connect '
+        'Claude here in chat and I will send you a link.'
     ),
     'pt': (
-        'O Claude Code CLI está instalado, mas ainda sem login. O dono precisa '
-        'conectar o Claude uma vez nesta linha (login local) e me pedir de novo.'
+        'O Claude Code CLI está instalado, mas ainda sem login. Pede pra conectar '
+        'o Claude aqui no chat que eu te mando o link.'
     ),
 }
 
@@ -294,8 +294,8 @@ def _onboarding_codex_status(codex, language):
         return {'en': 'available.', 'pt': 'disponível.'}[language]
     if codex.get('reason') == 'not_authenticated':
         return {
-            'en': 'installed but not logged in — connect once on this line.',
-            'pt': 'instalado mas sem login — conectar uma vez nesta linha.',
+            'en': 'installed but not logged in — ask me to connect here in chat for a link.',
+            'pt': 'instalado mas sem login — pede pra conectar aqui no chat que eu mando o link.',
         }[language]
     return {
         'en': 'not available in this environment yet.',
@@ -308,8 +308,8 @@ def _onboarding_claude_status(claude, language):
         return {'en': 'available.', 'pt': 'disponível.'}[language]
     if claude.get('reason') == 'not_authenticated':
         return {
-            'en': 'installed but not logged in — connect once on this line.',
-            'pt': 'instalado mas sem login — conectar uma vez nesta linha.',
+            'en': 'installed but not logged in — ask me to connect here in chat for a link.',
+            'pt': 'instalado mas sem login — pede pra conectar aqui no chat que eu mando o link.',
         }[language]
     return {
         'en': 'not available in this environment yet.',
