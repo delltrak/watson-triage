@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .analysis import Codex, render, triage
 from .core import Store, WatsonError, load_config, private_json, repo_name
+from .issue_ref import resolve_issue_number
 from .delivery import Plow, deliver
 from .speech import generate_voice
 from .github import GitHub
@@ -45,8 +46,9 @@ def main(argv=None):
     init.add_argument('--related', action='append', default=[])
     init.add_argument('--model')
     init.add_argument('--delivery', choices=['text', 'both'], default='text')
-    for cmd in ('track', 'untrack', 'triage'):
+    for cmd in ('track', 'untrack'):
         sub.add_parser(cmd).add_argument('number', type=int)
+    sub.add_parser('triage').add_argument('issue', help='Número, #N ou URL da issue no GitHub')
     sub.add_parser('sync')
     sub.add_parser('status')
     sub.add_parser('cycle', help='Rodada completa com efeitos explicitamente configurados.')
@@ -123,7 +125,8 @@ def main(argv=None):
                 elif args.command == 'sync':
                     output = sync(store, github, config)
                 elif args.command == 'triage':
-                    output = triage(store, github, model, config, args.number)
+                    number = resolve_issue_number(args.issue, config)
+                    output = triage(store, github, model, config, number)
                 elif args.command == 'watch':
                     if not 1 <= args.limit <= 20:
                         raise WatsonError('O limite deve ficar entre 1 e 20.')
