@@ -79,6 +79,12 @@ class CapabilityTests(unittest.TestCase):
         self.assertIn('github-credentials', pt)
         self.assertNotIn('O GitHub ainda', en)
         self.assertNotIn('GitHub is not connected', pt)
+        # iMessage-friendly: blank line between numbered setup steps
+        self.assertIn('1)', en)
+        self.assertIn('\n\n2)', en)
+        self.assertIn('\n\n3)', en)
+        self.assertIn('\n\n2)', pt)
+        self.assertIn('\n\n3)', pt)
 
     def test_check_github_reports_missing_cli(self):
         with patch('watson.capabilities.shutil.which', return_value=None):
@@ -113,6 +119,12 @@ class CapabilityTests(unittest.TestCase):
         self.assertIn('Not ready to investigate', report['summary'])
         self.assertNotIn('tudo ok', report['summary'].lower())
         self.assertIn('not connected', report['summary'].lower())
+        # Blank lines between 1/2/3 status items for plain iMessage
+        self.assertIn('1. GitHub', report['summary'])
+        self.assertIn('\n\n2. Codex CLI', report['summary'])
+        self.assertIn('\n\n3. Claude Code CLI', report['summary'])
+        self.assertIn('setup', report)
+        self.assertIn('\n\n2)', report['setup'])
 
 
 class MCPTests(unittest.TestCase):

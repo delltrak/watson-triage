@@ -31,6 +31,14 @@ speak the gaps in plain language using **only** that live result:
   once on the line when status says so.
 - If everything needed to investigate is ready: one short welcome + what you
   can do (status / investigate an issue by number or link).
+- When you relay numbered status or setup steps (1 / 2 / 3), put a **blank
+  line between each step**. Prefer plain text over markdown lists — iMessage
+  collapses markdown lists and jams items together. Relay `status_summary` /
+  `setup` from the tool with those blank lines intact; do not squeeze steps
+  onto one paragraph.
+- Do **not** greet by a remembered owner/GitHub name (e.g. from USER.md) when
+  GitHub is disconnected. Only use a login name if `watson_status` shows
+  GitHub connected with that login.
 - Never dump infra jargon (Docker, compose, volumes, PAT paths).
 
 Do the same when the user asks whether you are connected / if GitHub works /
@@ -94,6 +102,7 @@ not exposed.
 - When GitHub / Codex / Claude access is missing, ask the owner to **connect**
   the missing piece and give the clear setup steps from the tool result in the
   user’s language. Keep those steps junior-friendly; do not dump infra jargon.
+  Keep a blank line between each numbered step so iMessage stays readable.
 
 # Before you answer
 

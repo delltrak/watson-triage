@@ -18,21 +18,27 @@ _GITHUB_MISSING = {
         'GitHub is not connected yet, so I cannot investigate issues.\n'
         '\n'
         'Please connect GitHub once on the computer that runs Watson:\n'
+        '\n'
         '1) Create a GitHub token with read access to your repositories '
         '(GitHub → Settings → Developer settings → Personal access tokens).\n'
+        '\n'
         '2) In the watson-triage folder, create a private file named '
         '`github-credentials` with one line: GH_TOKEN=your_token '
         '(never share or commit this file).\n'
+        '\n'
         '3) Restart Watson the same way you usually start this pilot, then ask me again.'
     ),
     'pt': (
         'O GitHub ainda não está conectado, então não consigo investigar issues.\n'
         '\n'
         'Conecte o GitHub uma vez no computador onde o Watson roda:\n'
+        '\n'
         '1) Crie um token do GitHub com leitura dos seus repositórios '
         '(GitHub → Settings → Developer settings → Personal access tokens).\n'
+        '\n'
         '2) Na pasta watson-triage, crie o arquivo privado `github-credentials` '
         'com uma linha: GH_TOKEN=seu_token (nunca compartilhe nem versione este arquivo).\n'
+        '\n'
         '3) Reinicie o Watson como você costuma iniciar este piloto e peça de novo.'
     ),
 }
@@ -270,51 +276,67 @@ def capabilities_report(language=None, run=subprocess.run):
     lang = normalize_language(language) if language not in (None, '') else None
 
     if github['ok']:
-        status_en = (
-            f"GitHub connected"
+        gh_line_en = (
+            'GitHub connected'
             + (f" as {github['login']}" if github.get('login') else '')
             + '.'
         )
-        status_pt = (
-            f"GitHub conectado"
+        gh_line_pt = (
+            'GitHub conectado'
             + (f" como {github['login']}" if github.get('login') else '')
             + '.'
         )
     else:
-        status_en = 'GitHub not connected.'
-        status_pt = 'GitHub não conectado.'
+        gh_line_en = 'GitHub not connected.'
+        gh_line_pt = 'GitHub não conectado.'
 
     codex_en = codex_status_message(codex, 'en')
     codex_pt = codex_status_message(codex, 'pt')
     claude_en = claude_status_message(claude, 'en')
     claude_pt = claude_status_message(claude, 'pt')
 
-    summary = {
-        'en': f'{status_en} {codex_en} {claude_en}'.strip(),
-        'pt': f'{status_pt} {codex_pt} {claude_pt}'.strip(),
-    }
+    # Plain-text numbered checklist with blank lines between items — iMessage
+    # collapses markdown lists; blank lines survive.
+    checklist_en = (
+        f'1. GitHub — {gh_line_en}\n'
+        f'\n'
+        f'2. Codex CLI — {codex_en}\n'
+        f'\n'
+        f'3. Claude Code CLI — {claude_en}'
+    )
+    checklist_pt = (
+        f'1. GitHub — {gh_line_pt}\n'
+        f'\n'
+        f'2. Codex CLI — {codex_pt}\n'
+        f'\n'
+        f'3. Claude Code CLI — {claude_pt}'
+    )
+
+    if github['ok']:
+        summary = {
+            'en': f'Ready to investigate.\n\n{checklist_en}',
+            'pt': f'Pronto para investigar.\n\n{checklist_pt}',
+        }
+    else:
+        summary = {
+            'en': (
+                'Not ready to investigate: GitHub is missing.\n'
+                '\n'
+                f'{checklist_en}'
+            ),
+            'pt': (
+                'Ainda não dá para investigar: falta o GitHub.\n'
+                '\n'
+                f'{checklist_pt}'
+            ),
+        }
+
     setup_messages = None
     if not github['ok']:
         setup_messages = {
             'en': github_missing_message(github, 'en'),
             'pt': github_missing_message(github, 'pt'),
         }
-        summary['en'] = (
-            'Not ready to investigate: GitHub is missing. '
-            + status_en
-            + ' '
-            + codex_en
-            + ' '
-            + claude_en
-        )
-        summary['pt'] = (
-            'Ainda não dá para investigar: falta o GitHub. '
-            + status_pt
-            + ' '
-            + codex_pt
-            + ' '
-            + claude_pt
-        )
 
     report = {
         'github': {
