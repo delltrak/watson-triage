@@ -65,10 +65,11 @@ TOOLS = [
      'description': 'Start Codex device-code login and return a clickable auth URL '
                     '(+ one-time code) for the user to open on their phone. Use when '
                     'the user asks to connect/login Codex. Relays over iMessage — '
-                    'paste auth_url plainly with https visible. Does not complete '
-                    'localhost-only OAuth. Safe to call twice (resumes or restarts). '
-                    'Pass cancel=true to abort a pending login. Never invent success; '
-                    'confirm later with watson_status.',
+                    'paste auth_url plainly with https visible. A background waiter '
+                    'will proactively ping the chat when login completes — user does '
+                    'not need to say pronto/ready. Safe to call twice (resumes or '
+                    'restarts). Pass cancel=true to abort. Never invent success; '
+                    'confirm later with watson_status or the auto ping.',
      'inputSchema': {
          'type': 'object',
          'properties': {
@@ -91,9 +92,9 @@ TOOLS = [
      'description': 'Start Claude Code remote browser login and return a clickable '
                     'auth URL for iMessage. After the user signs in, they paste the '
                     'browser code back in chat — call again with code= that value to '
-                    'finish. Use when the user asks to connect/login Claude. Paste '
-                    'auth_url plainly (https visible). Pass cancel=true to abort. '
-                    'Never invent success; confirm with watson_status.',
+                    'finish. A background waiter pings the chat when auth completes. '
+                    'Paste auth_url plainly (https visible). Pass cancel=true to abort. '
+                    'Never invent success; confirm with watson_status or the auto ping.',
      'inputSchema': {
          'type': 'object',
          'properties': {

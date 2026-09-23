@@ -15,7 +15,14 @@ from watson.capabilities import (
 from watson.core import Store, WatsonError, private_json
 from watson.issue_ref import parse_issue_ref, resolve_issue_number, resolve_issue_ref
 from watson.mcp import TOOLS, dispatch, serve
-from watson.oauth_connect import _parse_claude, _parse_codex, _strip_ansi
+from watson.oauth_connect import (
+    _notify_body,
+    _parse_claude,
+    _parse_codex,
+    _strip_ansi,
+    push_auth_notification,
+    wait_and_notify,
+)
 
 
 class IssueRefTests(unittest.TestCase):
@@ -486,7 +493,7 @@ class OAuthConnectToolTests(unittest.TestCase):
 
         with patch('watson.oauth_connect.check_codex', return_value={
             'ok': False, 'reason': 'not_authenticated', 'connected': False,
-        }), patch('watson.oauth_connect._start_process', side_effect=fake_start),              patch('watson.oauth_connect._pid_alive', return_value=True),              patch('watson.oauth_connect._spawn_stdin_holder'):
+        }), patch('watson.oauth_connect._start_process', side_effect=fake_start),              patch('watson.oauth_connect._pid_alive', return_value=True),              patch('watson.oauth_connect._spawn_stdin_holder'), patch('watson.oauth_connect._spawn_auth_waiter', return_value=7777):
             response = dispatch(self.home, {
                 'method': 'tools/call',
                 'params': {
@@ -521,7 +528,7 @@ class OAuthConnectToolTests(unittest.TestCase):
 
         with patch('watson.oauth_connect.check_claude', return_value={
             'ok': False, 'reason': 'not_authenticated', 'connected': False,
-        }), patch('watson.oauth_connect._start_process', side_effect=fake_start),              patch('watson.oauth_connect._pid_alive', return_value=True),              patch('watson.oauth_connect._spawn_stdin_holder'):
+        }), patch('watson.oauth_connect._start_process', side_effect=fake_start),              patch('watson.oauth_connect._pid_alive', return_value=True),              patch('watson.oauth_connect._spawn_stdin_holder'), patch('watson.oauth_connect._spawn_auth_waiter', return_value=7777):
             response = dispatch(self.home, {
                 'method': 'tools/call',
                 'params': {
@@ -556,6 +563,114 @@ class OAuthConnectToolTests(unittest.TestCase):
             })
         self.assertTrue(response['isError'])
         self.assertIn('API key', response['content'][0]['text'])
+
+
+
+class OAuthNotifyTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = Path(self.tmp.name)
+        store = Store(self.home)
+        store.db.close()
+        private_json(self.home / 'config.json', {
+            'repository': 'demo/repo', 'assignee': 'owner', 'related_repositories': []})
+
+    def test_notify_body_pt_ok(self):
+        self.assertEqual(_notify_body('codex', 'completed', 'pt'), 'Codex conectado ✅')
+        self.assertEqual(
+            _notify_body('claude', 'completed', 'en'), 'Claude Code connected ✅')
+
+    def test_waiting_message_promises_auto_ping(self):
+        from watson.oauth_connect import _message_waiting_codex
+        msg = _message_waiting_codex('https://auth.openai.com/x', 'AAAA-BBBB', 'pt')
+        self.assertIn('automaticamente', msg)
+        self.assertIn('não precisa mandar "pronto"', msg.lower())
+        self.assertNotIn('me avisa que eu confiro', msg.lower())
+        self.assertNotIn('(ou manda "status")', msg.lower())
+
+    def test_push_auth_notification_posts_via_plow(self):
+        class FakePlow:
+            def __init__(self):
+                self.sent = []
+
+            def owner_chat(self):
+                return 'cht_test'
+
+            def send(self, chat, body, audio=None):
+                self.sent.append((chat, body))
+                return {'message_uid': 'msg_1', 'chat_uid': chat}
+
+        plow = FakePlow()
+        (self.home / 'oauth').mkdir(parents=True)
+        result = push_auth_notification(
+            self.home, 'codex', 'completed', 'pt', plow=plow)
+        self.assertTrue(result['ok'])
+        self.assertEqual(plow.sent, [('cht_test', 'Codex conectado ✅')])
+        # Idempotent
+        again = push_auth_notification(
+            self.home, 'codex', 'completed', 'pt', plow=plow)
+        self.assertTrue(again.get('skipped'))
+        self.assertEqual(len(plow.sent), 1)
+
+    def test_wait_and_notify_completes_when_auth_ok(self):
+        class FakePlow:
+            def owner_chat(self):
+                return 'cht_test'
+
+            def send(self, chat, body, audio=None):
+                return {'message_uid': 'msg_2', 'chat_uid': chat}
+
+        (self.home / 'oauth').mkdir(parents=True)
+        with patch('watson.oauth_connect._auth_ok', side_effect=[False, True]), \
+             patch('watson.oauth_connect._load_state', return_value={
+                 'pid': 1, 'status': 'waiting_browser', 'language': 'en',
+             }), \
+             patch('watson.oauth_connect._pid_alive', return_value=True):
+            result = wait_and_notify(
+                self.home, 'codex', language='en', timeout=5, poll_sec=0.01,
+                plow=FakePlow())
+        self.assertTrue(result.get('ok'))
+        self.assertEqual(result.get('outcome'), 'completed')
+        self.assertEqual(result.get('body'), 'Codex connected ✅')
+
+    def test_connect_codex_spawns_waiter(self):
+        class FakeProc:
+            pid = 4242
+            stdin = None
+
+        def fake_start(home, provider, cmd):
+            log = Path(home) / 'oauth' / f'{provider}.log'
+            log.parent.mkdir(parents=True, exist_ok=True)
+            log.write_text(
+                'https://auth.openai.com/codex/device\n'
+                'Enter this one-time code\nZZZZ-YYYY1\n'
+            )
+            return FakeProc()
+
+        spawned = []
+
+        def fake_waiter(home, provider, language):
+            spawned.append((str(home), provider, language))
+            return 8888
+
+        with patch('watson.oauth_connect.check_codex', return_value={
+            'ok': False, 'reason': 'not_authenticated', 'connected': False,
+        }), patch('watson.oauth_connect._start_process', side_effect=fake_start), \
+             patch('watson.oauth_connect._pid_alive', return_value=True), \
+             patch('watson.oauth_connect._spawn_auth_waiter', side_effect=fake_waiter):
+            response = dispatch(self.home, {
+                'method': 'tools/call',
+                'params': {
+                    'name': 'watson_connect_codex',
+                    'arguments': {'language': 'pt'},
+                },
+            })
+        self.assertFalse(response['isError'], response)
+        payload = json.loads(response['content'][0]['text'])
+        self.assertEqual(payload['status'], 'waiting_browser')
+        self.assertIn('automaticamente', payload['message'])
+        self.assertEqual(spawned, [(str(self.home), 'codex', 'pt')])
 
 
 if __name__ == '__main__':
