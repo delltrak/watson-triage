@@ -21,9 +21,10 @@ TOOLS = [
                     '(oi/olá/hey/hi), status ask, or "what\'s missing" BEFORE answering, '
                     'and pass language=pt when the user wrote Portuguese (including short '
                     'openers like "oi"). Returns `speak_this` / `user_message` / `onboarding` '
-                    '(same ready-to-send copy — relay verbatim), plus `do_not_invent: true` '
-                    'and `instruction`. NEVER invent connection status; only report fields '
-                    'from this JSON. Optional language: en, pt, or auto.',
+                    '(same ready-to-send copy — your entire reply MUST be exactly '
+                    'speak_this, character-for-character; no paraphrase or added setup), '
+                    'plus `do_not_invent: true` and `instruction`. NEVER invent connection '
+                    'status; only report fields from this JSON. Optional language: en, pt, or auto.',
      'inputSchema': {
          'type': 'object',
          'properties': {
@@ -178,7 +179,9 @@ def _status_result(store, language):
     result['do_not_invent'] = bool(caps.get('do_not_invent', True))
     result['instruction'] = caps.get(
         'instruction',
-        'Send speak_this to the user. Do not change connection facts.',
+        'Your entire reply MUST be exactly speak_this, character-for-character. '
+        'No paraphrase, no added setup steps, no reordering. '
+        'Do not invent connection facts.',
     )
     return result
 

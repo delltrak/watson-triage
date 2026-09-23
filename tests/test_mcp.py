@@ -185,7 +185,9 @@ class CapabilityTests(unittest.TestCase):
         self.assertTrue(report['do_not_invent'])
         self.assertEqual(
             report['instruction'],
-            'Send speak_this to the user. Do not change connection facts.',
+            'Your entire reply MUST be exactly speak_this, character-for-character. '
+            'No paraphrase, no added setup steps, no reordering. '
+            'Do not invent connection facts.',
         )
         self.assertEqual(report['speak_this'], report['onboarding'])
         self.assertEqual(report['user_message'], report['speak_this'])
@@ -275,7 +277,9 @@ class MCPTests(unittest.TestCase):
             'speak_this': 'Oi — sou o Watson, seu colega de engenharia.\n\n/help',
             'user_message': 'Oi — sou o Watson, seu colega de engenharia.\n\n/help',
             'do_not_invent': True,
-            'instruction': 'Send speak_this to the user. Do not change connection facts.',
+            'instruction': 'Your entire reply MUST be exactly speak_this, character-for-character. '
+            'No paraphrase, no added setup steps, no reordering. '
+            'Do not invent connection facts.',
         }
         with patch('watson.mcp.capabilities_report', return_value=fake) as caps:
             response = dispatch(self.home, {
@@ -293,7 +297,7 @@ class MCPTests(unittest.TestCase):
         self.assertEqual(payload['speak_this'], payload['onboarding'])
         self.assertEqual(payload['user_message'], payload['speak_this'])
         self.assertTrue(payload['do_not_invent'])
-        self.assertIn('Do not change connection facts', payload['instruction'])
+        self.assertIn('character-for-character', payload['instruction'])
 
     def test_status_speak_this_matches_github_connected_partial(self):
         """Top-level speak_this must match real GitHub connected + Codex/Claude gaps."""
@@ -322,7 +326,9 @@ class MCPTests(unittest.TestCase):
                 '3. **Claude Code CLI** — instalado mas sem login.'
             ),
             'do_not_invent': True,
-            'instruction': 'Send speak_this to the user. Do not change connection facts.',
+            'instruction': 'Your entire reply MUST be exactly speak_this, character-for-character. '
+            'No paraphrase, no added setup steps, no reordering. '
+            'Do not invent connection facts.',
         }
         with patch('watson.mcp.capabilities_report', return_value=fake):
             response = dispatch(self.home, {

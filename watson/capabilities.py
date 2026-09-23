@@ -486,7 +486,9 @@ def capabilities_report(language=None, run=subprocess.run):
     # onboarding via message_for.
     speak = message_for(onboarding, lang)
     instruction = (
-        'Send speak_this to the user. Do not change connection facts.'
+        'Your entire reply MUST be exactly speak_this, character-for-character. '
+        'No paraphrase, no added setup steps, no reordering. '
+        'Do not invent connection facts.'
     )
 
     report = {
