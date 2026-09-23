@@ -91,27 +91,56 @@ def _pid_alive(pid: int | None) -> bool:
     except ProcessLookupError:
         return False
     except PermissionError:
-        return True
+        # May still be a zombie we cannot signal; fall through to /proc check.
+        pass
+    # kill(0) succeeds for zombies; treat zombie state as not alive so cancel
+    # and waiter logic do not wait forever on a reaped-but-unwaited child.
+    try:
+        with open(f'/proc/{pid}/stat', encoding='utf-8') as fh:
+            data = fh.read()
+        rparen = data.rfind(')')
+        state = data[rparen + 2] if rparen >= 0 and len(data) > rparen + 2 else ''
+        if state == 'Z':
+            return False
+    except OSError:
+        return False
     return True
+
+
+def _reap_pid(pid: int | None) -> None:
+    """Reap a direct child if it already exited (avoid zombie false-alives)."""
+    if not pid or pid <= 0:
+        return
+    try:
+        os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        return
+    except OSError:
+        return
 
 
 def _terminate_pid(pid: int | None) -> None:
     if not pid or pid <= 0:
         return
+    _reap_pid(pid)
     if not _pid_alive(pid):
+        _reap_pid(pid)
         return
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
+        _reap_pid(pid)
         return
     for _ in range(20):
+        _reap_pid(pid)
         if not _pid_alive(pid):
             return
         time.sleep(0.1)
     try:
         os.kill(pid, signal.SIGKILL)
     except ProcessLookupError:
-        return
+        pass
+    _reap_pid(pid)
 
 
 def _waiter_pid_path(home: Path, provider: str) -> Path:
