@@ -26,7 +26,7 @@ class GitHubWriter:
             raise WatsonError('Operação GitHub não confirmada; conferir o histórico antes de repetir.')
         return json.loads(result.stdout)
 
-    def prepare(self, store, github, run_id, issue, text, kind):
+    def prepare(self, github, issue, text, kind):
         """Everything fallible that has no side effect: the fresh read, the
         state checks, the idempotency marker.
 
@@ -47,20 +47,14 @@ class GitHubWriter:
         existing = next((c for c in fresh['comments'] if marker in c['body']), None)
         if existing:
             return {'existing':{'url':existing['url'],'recovered':True}}
-        # STAGED, not committed: the claim rides the caller's cursor commit, so
-        # the two land together or neither does. Claiming after the checkpoint
-        # loses the update when it fails; claiming in its own transaction before
-        # the checkpoint strands a key that every retry then collides with.
-        key = store.stage_action(run_id, 'github_comment', payload)
         return {'payload':payload,'marker':marker,'text':text,'number':issue['number'],
-                'key':key,'existing':None}
+                'existing':None}
 
-    def send(self, store, pending):
-        """Post the claimed comment. The only uncertainty left after the
-        checkpoint, which is what the claim above exists to adjudicate."""
+    def send(self, store, run_id, pending):
+        """Claim, then post. The only uncertainty left after the checkpoint."""
         if pending['existing']:
             return pending['existing']
-        key = pending['key']
+        key = store.claim_action(run_id, 'github_comment', pending['payload'])
         try:
             result = self.post(f'issues/{pending["number"]}/comments',
                                {'body':pending['text']+'\n\n'+pending['marker']})

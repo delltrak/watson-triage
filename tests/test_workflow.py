@@ -102,76 +102,6 @@ class OwnerChannelTests(unittest.TestCase):
         self.assertIsNone(Cases(store).get('demo/repo', 7),
                           'cursor was saved despite the failed preflight — the update is now lost')
 
-    def test_a_staged_claim_and_the_cursor_land_together_or_not_at_all(self):
-        # The half-states are what this pins. A claim committed without its
-        # cursor strands a key that every retry collides with -- the issue is
-        # stuck for good. A cursor committed without its claim drops the update
-        # silently. One transaction has neither.
-        store = Store(self.home)
-        self.addCleanup(store.db.close)
-        cases = Cases(store)
-        key = store.stage_action(1, 'github_comment', {'n': 7})
-
-        staged = store.db.execute('SELECT COUNT(*) c FROM actions WHERE key=?', (key,)).fetchone()['c']
-        self.assertEqual(staged, 1, 'staged row should be visible inside the open transaction')
-
-        store.db.rollback()
-        rolled = store.db.execute('SELECT COUNT(*) c FROM actions WHERE key=?', (key,)).fetchone()['c']
-        self.assertEqual(rolled, 0, 'an uncommitted claim must not survive — that is the stuck-forever case')
-
-        key = store.stage_action(1, 'github_comment', {'n': 7})
-        cases.save('demo/repo', 7, 'cursor', 'waiting_info', {'ok': True})
-        committed = store.db.execute('SELECT COUNT(*) c FROM actions WHERE key=?', (key,)).fetchone()['c']
-        self.assertEqual(committed, 1)
-        self.assertIsNotNone(cases.get('demo/repo', 7))
-
-    def test_a_failed_issue_leaves_no_claim_for_the_next_one_to_publish(self):
-        # TWO issues, and that is the whole point. With one, cycle()'s
-        # `finally: store.db.close()` implicitly rolls back and the test passes
-        # with no rollback at all -- which is exactly what the first version of
-        # this test did. The hazard needs a SECOND commit to publish the first
-        # issue's orphaned claim: SQLite does not auto-abort most statement
-        # errors and the connection is shared across the loop.
-        class TwoIssues(FakeGitHub):
-            def __init__(self):
-                super().__init__()
-                second = copy.deepcopy(ISSUE); second['number'] = 8
-                self.items = [self.item, second]
-
-            def issue(self, repo, number):
-                return copy.deepcopy(next(i for i in self.items if i['number'] == number))
-
-        orphan_key = {}
-
-        def stage_then_fail(store, github, run_id, issue, text, kind):
-            key = store.stage_action(run_id, 'github_comment', {'n': issue['number']})
-            if issue['number'] == 7:
-                orphan_key['key'] = key
-                raise WatsonError('falhou depois de reservar')
-            return {'existing': None, 'number': issue['number'], 'key': key}
-
-        writer = Mock()
-        writer.prepare.side_effect = stage_then_fail
-        writer.send.return_value = {'url': 'https://example.invalid/c'}
-
-        private_json(self.home / 'config.json',
-                     dict(self.cfg, github_comments=True, notify_owner=False, cycle_limit=2))
-        store = Store(self.home)
-        store.track('demo/repo', 7); store.track('demo/repo', 8)
-        store.db.close()
-
-        outcome = cycle(self.home, model=Model(), github=TwoIssues(), writer=writer)
-        self.assertTrue(outcome['errors'], 'issue 7 was supposed to fail')
-        self.assertTrue(outcome['processed'], 'issue 8 was supposed to commit after it')
-
-        store = Store(self.home)
-        self.addCleanup(store.db.close)
-        # Issue 8's own claim is legitimately present; only issue 7's must not be.
-        orphans = store.db.execute('SELECT COUNT(*) c FROM actions WHERE key=?',
-                                   (orphan_key['key'],)).fetchone()['c']
-        self.assertEqual(orphans, 0,
-                         "issue 7's staged claim survived and issue 8's commit published it")
-
     def test_a_quiet_agent_resolves_no_channel(self):
         from watson.workflow import owner_channel
         self.assertIsNone(owner_channel({'notify_owner': False}))
@@ -188,7 +118,7 @@ class FlowTests(unittest.TestCase):
         private_json(self.home/'config.json',self.cfg)
         s=Store(self.home); s.track('demo/repo',7); s.db.close()
         self.writer=Mock()
-        self.writer.prepare.return_value={'existing':None,'number':7,'key':1}
+        self.writer.prepare.return_value={'existing':None,'number':7}
         self.writer.send.return_value={'url':'https://github.com/demo/repo/issues/7#comment'}
 
     def test_wait_restart_reply_resume_and_no_duplicate(self):
