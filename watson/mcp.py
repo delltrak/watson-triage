@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from .analysis import Codex, triage
-from .core import Store, WatsonError, load_config
+from .core import Store, WatsonError, load_config, resolve_issue_number
 from .github import GitHub
 
 
@@ -15,10 +15,38 @@ TOOLS = [
      'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}},
     {'name': 'watson_investigate',
      'description': 'Investigar uma issue no repositório configurado, com código e evidências atuais. '
+                    'Aceita o número (ex.: 12), #12, ou o link completo do GitHub '
+                    '(ex.: https://github.com/dono/projeto/issues/12). '
                     'Pode consumir a assinatura Codex. Não envia mensagens nem escreve no GitHub.',
-     'inputSchema': {'type': 'object', 'properties': {'number': {'type': 'integer', 'minimum': 1}},
-                     'required': ['number'], 'additionalProperties': False}},
+     'inputSchema': {
+         'type': 'object',
+         'properties': {
+             'issue': {
+                 'type': 'string',
+                 'description': 'Link da issue, #123 ou número em texto.',
+             },
+             'number': {
+                 'type': 'integer',
+                 'minimum': 1,
+                 'description': 'Número da issue (alternativa a issue).',
+             },
+         },
+         'additionalProperties': False,
+     }},
 ]
+
+
+def _issue_argument(arguments):
+    keys = set(arguments)
+    if keys == {'number'}:
+        return arguments['number']
+    if keys == {'issue'}:
+        return arguments['issue']
+    if keys == {'issue', 'number'}:
+        raise WatsonError('Envie só o link/número em "issue" ou só o "number", não os dois.')
+    if not keys:
+        raise WatsonError('Me diga o número da issue ou cole o link do GitHub.')
+    raise WatsonError('Para investigar, use só "issue" (link ou número) ou só "number".')
 
 
 def dispatch(home, message):
@@ -43,11 +71,11 @@ def dispatch(home, message):
         if name == 'watson_status' and arguments:
             raise WatsonError('Status não aceita argumentos.')
         if name == 'watson_investigate':
-            if (set(arguments) != {'number'} or type(arguments['number']) is not int
-                    or arguments['number'] < 1):
-                raise WatsonError('Forneça somente um número inteiro positivo.')
+            raw = _issue_argument(arguments)
         elif name != 'watson_status':
             raise WatsonError('Ferramenta não disponível.')
+        else:
+            raw = None
         store = Store(home)
         try:
             config = load_config(Path(home))
@@ -55,8 +83,9 @@ def dispatch(home, message):
                 if name == 'watson_status':
                     result = store.history()
                 else:
+                    number = resolve_issue_number(raw, config)
                     github = GitHub([config['repository']] + config['related_repositories'])
-                    result = triage(store, github, Codex(home, config.get('model')), config, arguments['number'])
+                    result = triage(store, github, Codex(home, config.get('model')), config, number)
             return {'content': [{'type': 'text', 'text': json.dumps(result, ensure_ascii=False)}], 'isError': False}
         finally:
             store.db.close()
