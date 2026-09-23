@@ -1,5 +1,7 @@
 # Integração Hermes / Plow
 
+> Piloto local com **plow-agents** (imagem + compose): ver [piloto-plow.md](piloto-plow.md). OpenClaw não é usado.
+
 Estado: núcleo local e entrega Plow validados; integração Hermes opcional pendente.
 
 No piloto, o login por iMessage e a criação da linha já foram concluídos.
@@ -56,7 +58,7 @@ O Watson usa Codex local e a API Plow diretamente. A ponte Hermes é opcional e 
 
 - Login Plow, linha e entrega ao proprietário: validados.
 - Texto e vídeo reproduzível no iMessage: validados.
-- Áudio Sol: geração validada com o endpoint Read Aloud usado pelo Deca.
+- Áudio Sol: geração validada com o endpoint Read Aloud usado pelo Dica.
 - Mensagem de voz nativa: bloqueada até o Plow expor a operação do provedor; [issue #199](https://github.com/plow-pbc/hermes-plugin-plow/issues/199).
 - Memória, retomada após resposta e pedido privado de acesso: validados no laboratório fictício.
 - Registro de uso: adaptador local para o cliente oficial do Agent Index, sem incluir histórico pessoal.

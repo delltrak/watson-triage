@@ -8,3 +8,5 @@ __pycache__
 plow-credentials
 auth.json
 tests
+docs
+.github

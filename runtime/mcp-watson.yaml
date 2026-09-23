@@ -1,0 +1,9 @@
+# Fragmento mesclado em config.yaml (seed + homes existentes).
+# Ponte stdio somente leitura: watson_status, watson_investigate.
+# Sem envio Plow, sem escrita GitHub, sem merge via MCP.
+mcp_servers:
+  watson:
+    command: /opt/hermes/.venv/bin/watson
+    args: ["--home", "/var/lib/hermes/watson", "mcp"]
+    timeout: 900
+    connect_timeout: 30

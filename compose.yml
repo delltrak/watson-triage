@@ -1,0 +1,17 @@
+# Compose para plow-agents deploy --local (stack oficial plow-agents).
+# OpenClaw / plow-openclaw-agent NÃO entram neste piloto.
+services:
+  agent:
+    build: .
+    # Credencial da linha Plow: `plow-agents mint` / `plow-agents deploy --local`.
+    # PLOW_CREDENTIALS aponta para um arquivo fora do checkout se preferir.
+    env_file: ${PLOW_CREDENTIALS:-./plow-credentials}
+    volumes:
+      # Home Hermes: sessões, config e estado Watson em /var/lib/hermes/watson.
+      - agent-home:/var/lib/hermes
+    # Checkpoint do agente ~30s no SIGTERM; prazo do Docker precisa ficar além.
+    stop_grace_period: 35s
+    # Sem ports: o agente conecta ao Plow de saída (outbound).
+
+volumes:
+  agent-home:
