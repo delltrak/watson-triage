@@ -2,7 +2,7 @@
 
 Used by the Dockerfile seed step and by cont-init 20-watson-mcp on every boot.
 - mcp_servers.watson: replaced by the overlay block.
-- skills.platform_disabled.<platform>: union (never re-enables anything).
+- skills.platform_disabled.<platform> and skills.external_dirs: union (never removes anything).
 
 Usage: python watson-config-merge.py CONFIG OVERLAY
 """
@@ -11,6 +11,13 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+
+
+def _as_list(value):
+    """Hermes accepts a scalar string or a list for these keys (skill_utils._config_str_list)."""
+    if isinstance(value, str):
+        return [value]
+    return list(value) if isinstance(value, (list, tuple)) else []
 
 
 def merge(data, overlay):
@@ -23,11 +30,20 @@ def merge(data, overlay):
             servers['watson'] = watson
             changed = True
         data['mcp_servers'] = servers
+    dirs = (overlay.get('skills') or {}).get('external_dirs') or []
+    if dirs:
+        skills = data.get('skills') or {}
+        current = _as_list(skills.get('external_dirs'))
+        missing = [d for d in dirs if d not in current]
+        if missing:
+            skills['external_dirs'] = current + missing
+            data['skills'] = skills
+            changed = True
     wanted = (overlay.get('skills') or {}).get('platform_disabled') or {}
     for platform, names in wanted.items():
         skills = data.get('skills') or {}
         disabled = skills.get('platform_disabled') or {}
-        current = list(disabled.get(platform) or [])
+        current = _as_list(disabled.get(platform))
         missing = [name for name in names or () if name not in current]
         if missing:
             disabled[platform] = current + missing

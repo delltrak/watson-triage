@@ -218,13 +218,24 @@ def _nums(numbers, lang):
     return items[0] if len(items) == 1 else ', '.join(items[:-1]) + joiner + items[-1]
 
 
+def _clause(text):
+    """The model's reason as a clause inside our sentence: no trailing stop, lowercase lead word."""
+    text = ' '.join(str(text).split()).rstrip(' .;:,')
+    if len(text) > 1 and text[0].isupper() and (text[1].islower() or text[1] == ' '):
+        text = text[0].lower() + text[1:]
+    return text
+
+
 def _blocker(kind, value, n, lang, run_lang='pt'):
     pt = lang == 'pt'
     if kind == 'model':  # the model writes its reason in the run's language
-        if lang == run_lang:
-            return value
-        return ('a triagem achou itens que o PR não cobre (veja os achados)' if pt
-                else 'the triage found items the PR does not cover (see findings)')
+        generic = ('a triagem achou itens que o PR não cobre (veja os achados)' if pt
+                   else 'the triage found items the PR does not cover (see findings)')
+        reason = _clause(value or '')
+        if lang != run_lang or not reason or reason == generic:
+            return generic
+        return (f'a triagem aponta algo que o PR não cobre: {reason}' if pt
+                else f'the triage points to something the PR does not cover: {reason}')
     if kind == 'unchecked':
         if pt:
             return f'a #{n} ainda tem {value} {"item" if value == 1 else "itens"} sem marcar na lista'

@@ -140,8 +140,11 @@ honesto e pede para conectar.
   `config.yaml` guarda só o template). Sem isso o `watson_status` via MCP via o
   GitHub como desconectado mesmo com o token montado.
 - Greeting puro do dono na DM Plow (texto só com `oi`, `olá`, `hey`, `bom dia`,
-  …) é respondido pelo hook `watson-greet` com o `speak_this` exato do
-  `watson_status`, **sem chamar o LLM**; o wake de restart do Plow fica em
+  "oi, como vai?", "e aí watson", …) é respondido pelo hook `watson-greet` **sem
+  chamar o LLM**: no primeiro contato, com dono novo, quando o quadro de conexões
+  muda ou quando falta algo para investigar, vai o checklist completo (o
+  `speak_this` exato do `watson_status`); nos outros, uma linha curta. O que o
+  dono já viu fica em `/var/lib/hermes/watson/owner.json`; o wake de restart do Plow fica em
   silêncio (`NO_REPLY`) do mesmo jeito. O turno vai para o transcript
   normalmente. Qualquer outra mensagem (pedido, pergunta de status, foto,
   resposta citando outra mensagem, grupo, não-dono) segue pelo LLM + tools.
@@ -150,6 +153,12 @@ honesto e pede para conectar.
   pedindo conferência quando há pendências (itens sem marcar, PR posterior que
   também cita a issue, CI falhando, revisão pedindo mudanças). Com PR aberto, diz
   que já existe e não abre outro. O Watson só **sugere**; nunca fecha issue.
+- **Tropa:** cada papel (seletor de arquivos, investigador, revisor) roda num
+  time/modelo — por padrão o Time Codex investiga (gpt-6-sol) e o Time Claude
+  revisa (claude-sonnet-5), conferindo cada achado contra as evidências. O dono
+  vê com "minha tropa" e troca com "coloca o revisor no opus" / "tropa padrão"
+  (hook, só o dono). Time sem login é coberto pelo outro, e a resposta diz isso.
+  Escolha salva em `/var/lib/hermes/watson/roster.json`.
 - **Idioma:** o Watson responde no idioma do dono. Ordem: idioma explícito da
   chamada → último idioma detectado nas mensagens do dono (hook) → padrão da
   linha (`config.json` `"language": "en"` ou `WATSON_LANGUAGE=en` no
@@ -157,6 +166,19 @@ honesto e pede para conectar.
 - `/help` na Plow responde o help do Watson (`watson/chat_help.py`, hook
   `command:help`) em vez da lista de comandos do Hermes; `/help en` em inglês.
   Outros argumentos (`/help skills`) seguem para o help do Hermes.
+  Não precisa digitar `/help`: "o que você faz?", "ajuda", "what can you do?"
+  respondem o mesmo help (hook, sem LLM). "como funciona?" ou "me ajuda" logo
+  depois de uma resposta vão para o LLM, porque dependem do contexto.
+- `#N` sem repositório vai para o repositório investigado por último (24h),
+  senão para o padrão; quando não é o padrão, a resposta começa dizendo qual foi.
+- Skills do Hermes que não servem para triagem, ou arriscadas (codex,
+  claude-code, opencode, github, …), ficam desligadas em `plow_chat` e
+  `plow_email`; o playbook do Watson (`skills/watson/watson-playbook`) vem da
+  imagem e é carregado sob demanda.
+- Mensagem enviada enquanto o Watson termina de mandar a resposta anterior: o
+  plugin do Plow às vezes a enfileira depois de a sessão ficar livre, e ela só
+  andava com a mensagem seguinte. O hook detecta isso e a processa na hora (log
+  "starting follow-up queued after its session went idle").
 - Codex/Claude: login via chat (`watson_connect_codex` / `watson_connect_claude`);
   credenciais ficam em `/var/lib/hermes/.codex` e `/var/lib/hermes/.claude*`.
 

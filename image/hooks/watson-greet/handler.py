@@ -1,9 +1,11 @@
 """Watson greeting short-circuit (Hermes gateway hook, loaded on gateway:startup).
 
 Wraps GatewayTurnMixin._run_agent: when the owner's Plow DM is a plain-text
-greeting ("oi", "olá", "hey", "bom dia", ...), the turn returns
-watson.greeting.greeting_reply() — the exact watson_status speak_this — with
-no LLM call, so connection status cannot be paraphrased or invented. The Plow
+greeting ("oi", "olá", "hey", "bom dia", ...) or a squad command ("minha tropa",
+"coloca o revisor no opus", "tropa padrão"), the turn returns
+watson.greeting.owner_shortcut() — the exact watson_status speak_this or the
+squad copy — with no LLM call, so status cannot be paraphrased or invented and
+only the owner can change the squad. The Plow
 restart wake ("you just came online") gets its silence sentinel the same way:
 the persona stays silent there, and no LLM turn can volunteer a stale status.
 
@@ -13,7 +15,9 @@ other turn (the greeting + reply land in the transcript). Every failure falls
 back to the normal LLM path.
 
 It also answers /help on Plow with Watson's own help (command:help hook
-decision), instead of the stock Hermes command list.
+decision), instead of the stock Hermes command list, and starts a Plow
+follow-up that was queued just as its session went idle (see
+_install_orphan_rescue).
 """
 from __future__ import annotations
 
@@ -166,7 +170,7 @@ def _install() -> None:
         print("[watson-greet] unexpected _handle_message_with_agent signature; bypass OFF", flush=True)
         return
 
-    from watson.greeting import greeting_reply
+    from watson.greeting import owner_shortcut
 
     async def _handle_message_with_agent(self, event, *args, **kwargs):
         token = _inbound_text.set(_spoken_words(event))
@@ -186,7 +190,9 @@ def _install() -> None:
                 elif text is not None and _owner_dm(source):
                     _remember_owner_language(text)
                     speak = await asyncio.wait_for(
-                        asyncio.to_thread(greeting_reply, text), _TIMEOUT_SEC)
+                        asyncio.to_thread(owner_shortcut, text, _watson_home(),
+                                          owner_uid=str(getattr(source, "user_id", "") or ""), remember=True),
+                        _TIMEOUT_SEC)
         except Exception:
             logger.exception("watson-greet: speak_this failed; falling back to the LLM")
             speak = None
@@ -204,6 +210,48 @@ def _install() -> None:
     mixin._run_agent = _run_agent
     mixin._watson_greet_patched = True
     print("[watson-greet] patched GatewayTurnMixin._run_agent (owner DM greetings -> speak_this)", flush=True)
+
+
+def _install_orphan_rescue() -> None:
+    """Start a follow-up that was queued after its session went idle.
+
+    plow_chat's busy handler (owner_interrupts) awaits the runner's steer check,
+    which hops to threads, before it queues the owner's message into the
+    adapter's pending slot. When the previous turn ends during those hops, its
+    cleanup sees an empty slot and releases the session; the message then sits
+    in the slot with no task to drain it until the owner sends something else.
+    After the busy path returns, a pending message on an idle session is
+    started exactly like handle_message starts an idle one.
+    """
+    from gateway.platforms.base import BasePlatformAdapter as base
+
+    if base.__dict__.get("_watson_orphan_rescue"):
+        return
+    while_active = base.__dict__.get("_handle_message_while_active")
+    if (not inspect.iscoroutinefunction(while_active)
+            or list(inspect.signature(while_active).parameters)[:3] != ["self", "event", "session_key"]
+            or not callable(getattr(base, "_start_session_processing", None))):
+        print("[watson-greet] unexpected busy-path signature; orphan rescue OFF", flush=True)
+        return
+
+    async def _handle_message_while_active(self, event, session_key, *args, **kwargs):
+        result = await while_active(self, event, session_key, *args, **kwargs)
+        try:
+            if (getattr(getattr(self, "platform", None), "value", None) == _PLATFORM
+                    and session_key not in self._active_sessions):
+                orphan = self._pending_messages.pop(session_key, None)
+                if orphan is not None:
+                    logger.info("watson-greet: starting follow-up queued after its session went idle (%s)",
+                                session_key)
+                    self._start_session_processing(orphan, session_key)
+        except Exception:
+            logger.exception("watson-greet: orphaned follow-up rescue failed")
+        return result
+
+    _handle_message_while_active.__wrapped__ = while_active
+    base._handle_message_while_active = _handle_message_while_active
+    base._watson_orphan_rescue = True
+    print("[watson-greet] patched BasePlatformAdapter busy path (orphaned follow-up rescue)", flush=True)
 
 
 def _help_decision(context):
@@ -236,4 +284,8 @@ def handle(event_type, context):
         _install()
     except Exception as exc:  # never block gateway boot
         print(f"[watson-greet] install failed; LLM path unchanged: {exc}", flush=True)
+    try:
+        _install_orphan_rescue()
+    except Exception as exc:  # never block gateway boot
+        print(f"[watson-greet] orphan rescue install failed: {exc}", flush=True)
     return None

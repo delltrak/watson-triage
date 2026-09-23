@@ -150,6 +150,14 @@ class LinkedPrTests(unittest.TestCase):
         self.assertEqual(action['kind'], 'review_close')
         self.assertIn('E2E completo pendente', action['say']['pt'])
 
+    def test_model_reason_reads_as_one_sentence(self):
+        closure = {'assessment': 'pending', 'pull_numbers': [72], 'evidence_ids': ['pull:72'],
+                   'reason': 'A validação do fluxo ainda está pendente.'}
+        say = self.run_triage(model_result(closure))['result']['issue_action']['say']['pt']
+        self.assertIn('Mas a triagem aponta algo que o PR não cobre: a validação do fluxo ainda está pendente. '
+                      'Confira antes de fechar a #71', say)
+        self.assertNotIn('..', say)
+
     def test_later_multi_issue_pr_blocks_close(self):
         later = cross_ref(47, merged_at='2026-09-22T16:00:00Z', body='Refs #71\nRefs #40\nRefs #44')
         self.gh.fix['issues/71/timeline'].append(later)
@@ -350,14 +358,16 @@ class SpeakFirstTests(unittest.TestCase):
         for language, expected in [('pt', say_map['pt']), ('en', say_map['en']), (None, say_map['pt'])]:
             args = {'issue': '#71', **({'language': language} if language else {})}
             with patch('watson.mcp.require_github'), patch('watson.mcp.require_codex'), \
-                 patch('watson.mcp.triage', return_value=copy.deepcopy(fake)), patch('watson.mcp.GitHub'), patch('watson.mcp.Codex'):
+                 patch('watson.mcp.triage', return_value=copy.deepcopy(fake)), patch('watson.mcp.GitHub'), patch('watson.mcp.Crew'), \
+                 patch('watson.mcp.roster.connected_teams', return_value={'codex': True, 'claude': True}):
                 response = dispatch(home, {'method': 'tools/call', 'params': {'name': 'watson_investigate', 'arguments': args}})
             payload = json.loads(response['content'][0]['text'])
             self.assertEqual(payload['speak_first'], expected)
             self.assertIn('never closes issues', payload['instruction'])
         fake['result']['issue_action'] = {'kind': 'merged_partial', 'lead': False, 'say': {'pt': '', 'en': ''}}
         with patch('watson.mcp.require_github'), patch('watson.mcp.require_codex'), \
-             patch('watson.mcp.triage', return_value=fake), patch('watson.mcp.GitHub'), patch('watson.mcp.Codex'):
+             patch('watson.mcp.triage', return_value=fake), patch('watson.mcp.GitHub'), patch('watson.mcp.Crew'), \
+                 patch('watson.mcp.roster.connected_teams', return_value={'codex': True, 'claude': True}):
             response = dispatch(home, {'method': 'tools/call', 'params': {'name': 'watson_investigate', 'arguments': {'number': 71}}})
         self.assertNotIn('speak_first', json.loads(response['content'][0]['text']))
 

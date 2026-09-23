@@ -146,8 +146,8 @@ class CapabilityTests(unittest.TestCase):
         self.assertIn('not connected', report['summary'].lower())
         # Blank lines between 1/2/3 status items for plain iMessage
         self.assertIn('1. **GitHub**', report['summary'])
-        self.assertIn('\n\n2. **Codex CLI**', report['summary'])
-        self.assertIn('\n\n3. **Claude Code CLI**', report['summary'])
+        self.assertIn('\n\n2. **Team Codex** (investigates)', report['summary'])
+        self.assertIn('\n\n3. **Team Claude** (reviews)', report['summary'])
         self.assertIn('setup', report)
         self.assertNotIn('github-credentials', report['setup'])
         self.assertNotIn('GH_TOKEN', report['setup'])
@@ -177,11 +177,11 @@ class CapabilityTests(unittest.TestCase):
         self.assertNotIn('Deltrak', text)
         self.assertIn('Por enquanto ainda não consigo investigar', text)
         self.assertIn('**GitHub**', text)
-        self.assertIn('**Codex CLI**', text)
-        self.assertIn('**Claude Code CLI**', text)
+        self.assertIn('**Time Codex**', text)
+        self.assertIn('**Time Claude**', text)
         self.assertIn('\n\n1. **GitHub**', text)
-        self.assertIn('\n\n2. **Codex CLI**', text)
-        self.assertIn('\n\n3. **Claude Code CLI**', text)
+        self.assertIn('\n\n2. **Time Codex**', text)
+        self.assertIn('\n\n3. **Time Claude**', text)
         self.assertNotIn('github-credentials', text)
         self.assertNotIn('GH_TOKEN', text)
         self.assertNotIn('Personal access', text)
@@ -264,9 +264,9 @@ class CapabilityTests(unittest.TestCase):
         self.assertNotIn('falta o GitHub', text.lower())
         self.assertNotIn('falta conectar algumas coisas', text)
         # Codex/Claude still need connect.
-        self.assertIn('**Codex CLI**', text)
+        self.assertIn('**Time Codex**', text)
         self.assertIn('sem login', text)
-        self.assertIn('**Claude Code CLI**', text)
+        self.assertIn('**Time Claude**', text)
         self.assertIn('pede pra conectar aqui no chat', text)
 
     def test_speak_this_honesty_when_github_missing(self):
@@ -283,8 +283,8 @@ class CapabilityTests(unittest.TestCase):
         self.assertIn('not connected yet', en['speak_this'].lower())
         self.assertIn('**GitHub**', en['speak_this'])
         # Must not invent Codex/Claude as missing when they are ok.
-        self.assertIn('2. **Codex CLI** — connected.', en['speak_this'])
-        self.assertIn('3. **Claude Code CLI** — connected.', en['speak_this'])
+        self.assertIn('2. **Team Codex** (investigates) — connected.', en['speak_this'])
+        self.assertIn('3. **Team Claude** (reviews) — connected.', en['speak_this'])
         self.assertNotIn('available', en['speak_this'])
         self.assertNotIn('not logged in', en['speak_this'])
 
@@ -298,8 +298,8 @@ class CapabilityTests(unittest.TestCase):
              patch('watson.capabilities.check_claude', return_value=fake_claude):
             text = capabilities_report(language='pt')['speak_this']
         self.assertIn('1. **GitHub** — conectado como delltrak.', text)
-        self.assertIn('2. **Codex CLI** — instalado mas sem login — pede pra conectar aqui no chat', text)
-        self.assertIn('3. **Claude Code CLI** — instalado mas sem login — pede pra conectar aqui no chat', text)
+        self.assertIn('2. **Time Codex** (investiga) — instalado mas sem login — pede pra conectar aqui no chat', text)
+        self.assertIn('3. **Time Claude** (revisa) — instalado mas sem login — pede pra conectar aqui no chat', text)
         for banned in ('disponível', 'não conectado', 'github-credentials', 'GH_TOKEN',
                        'Personal access', 'token'):
             self.assertNotIn(banned, text)
@@ -311,8 +311,8 @@ class CapabilityTests(unittest.TestCase):
              patch('watson.capabilities.check_codex', return_value=fake_ok), \
              patch('watson.capabilities.check_claude', return_value=fake_ok):
             report = capabilities_report(language='pt')
-        self.assertIn('2. **Codex CLI** — conectado.', report['speak_this'])
-        self.assertIn('3. **Claude Code CLI** — conectado.', report['speak_this'])
+        self.assertIn('2. **Time Codex** (investiga) — conectado.', report['speak_this'])
+        self.assertIn('3. **Time Claude** (revisa) — conectado.', report['speak_this'])
         self.assertNotIn('disponível', json.dumps(report, ensure_ascii=False))
 
     def test_check_codex_needs_positive_login_marker(self):
@@ -430,7 +430,7 @@ class MCPTests(unittest.TestCase):
         self.assertEqual(messages[0]['result']['protocolVersion'], '2025-06-18')
         tools = {t['name']: t for t in messages[1]['result']['tools']}
         self.assertEqual(set(tools), {
-            'watson_status', 'watson_investigate',
+            'watson_status', 'watson_investigate', 'watson_squad',
             'watson_connect_codex', 'watson_connect_claude',
         })
         props = tools['watson_investigate']['inputSchema']['properties']
@@ -570,7 +570,8 @@ class MCPTests(unittest.TestCase):
              patch('watson.mcp.require_codex', return_value={'ok': True}), \
              patch('watson.mcp.triage', return_value=fake) as triage, \
              patch('watson.mcp.GitHub'), \
-             patch('watson.mcp.Codex'):
+             patch('watson.mcp.Crew'), \
+             patch('watson.mcp.roster.connected_teams', return_value={'codex': True, 'claude': True}):
             response = dispatch(self.home, {
                 'method': 'tools/call',
                 'params': {
@@ -591,7 +592,8 @@ class MCPTests(unittest.TestCase):
              patch('watson.mcp.require_codex', return_value={'ok': True}), \
              patch('watson.mcp.triage', return_value=fake) as triage, \
              patch('watson.mcp.GitHub') as gh, \
-             patch('watson.mcp.Codex'):
+             patch('watson.mcp.Crew'), \
+             patch('watson.mcp.roster.connected_teams', return_value={'codex': True, 'claude': True}):
             response = dispatch(self.home, {
                 'method': 'tools/call',
                 'params': {
@@ -630,7 +632,8 @@ class MCPTests(unittest.TestCase):
              patch('watson.mcp.require_codex', return_value={'ok': True}), \
              patch('watson.mcp.triage', return_value=fake) as triage, \
              patch('watson.mcp.GitHub'), \
-             patch('watson.mcp.Codex'):
+             patch('watson.mcp.Crew'), \
+             patch('watson.mcp.roster.connected_teams', return_value={'codex': True, 'claude': True}):
             response = dispatch(self.home, {
                 'method': 'tools/call',
                 'params': {
@@ -644,7 +647,7 @@ class MCPTests(unittest.TestCase):
     def test_internal_failure_includes_exception_type(self):
         err = io.StringIO()
         with patch('watson.mcp.require_github', return_value={'ok': True}), \
-             patch('watson.mcp.resolve_issue_ref', side_effect=RuntimeError('boom')), \
+             patch('watson.mcp.resolve_issue_target', side_effect=RuntimeError('boom')), \
              patch('watson.mcp.sys.stderr', err):
             response = dispatch(self.home, {
                 'method': 'tools/call',

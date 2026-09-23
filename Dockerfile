@@ -56,6 +56,9 @@ RUN set -eu; \
 
 # Estado Watson sob o home Hermes (volume agent-home). Criado de novo no boot.
 COPY --chmod=0755 image/cont-init.d/20-watson-mcp /etc/cont-init.d/20-watson-mcp
+# Skill watson-playbook (somente leitura, via skills.external_dirs no overlay).
+COPY skills /opt/watson-triage/skills
+RUN chmod -R u=rwX,go=rX /opt/watson-triage/skills
 # Hook de gateway: greeting do dono → speak_this exato, sem LLM.
 # Sem --chmod no diretório (0644 tornaria o dir intransitável para uid 10000).
 COPY --chmod=0755 image/cont-init.d/25-watson-greeting-bypass /etc/cont-init.d/25-watson-greeting-bypass

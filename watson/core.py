@@ -157,15 +157,33 @@ class Store:
                         (repo, number, f'#{number}', int(enabled), int(enabled)))
         self.db.commit()
 
+    def recent_repo(self, hours=24):
+        """Repo the owner last looked at (fresh run, forced retry or cache hit) within the window, else None.
+
+        Ranked by time, not run id: a cache hit or a retried review never adds a newer run row.
+        All timestamps come from now() (UTC ISO), so they sort as strings.
+        """
+        row = self.db.execute(
+            "SELECT repo, at FROM (SELECT repo, checked AS at FROM issues WHERE checked IS NOT NULL "
+            "UNION ALL SELECT repo, completed FROM runs WHERE status='complete' AND completed IS NOT NULL) "
+            "ORDER BY at DESC LIMIT 1").fetchone()
+        if not row:
+            return None
+        try:
+            finished = datetime.fromisoformat(row['at'])
+        except ValueError:
+            return None
+        return row['repo'] if (datetime.now(timezone.utc) - finished).total_seconds() < hours * 3600 else None
+
     def latest(self, repo, number):
         row = self.db.execute("SELECT * FROM runs WHERE repo=? AND number=? AND status='complete' ORDER BY id DESC LIMIT 1",
                               (repo, number)).fetchone()
         return dict(row) if row else None
 
-    def begin(self, repo, number, fingerprint):
+    def begin(self, repo, number, fingerprint, force=False):
         row = self.db.execute('SELECT * FROM runs WHERE repo=? AND number=? AND fingerprint=?',
                               (repo, number, fingerprint)).fetchone()
-        if row and row['status'] == 'complete':
+        if row and row['status'] == 'complete' and not force:
             return row['id'], False
         if row:
             self.db.execute("UPDATE runs SET status='running',error=NULL,started=? WHERE id=?", (now(), row['id']))

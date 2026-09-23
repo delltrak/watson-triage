@@ -3,15 +3,17 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 import traceback
 from pathlib import Path
 
-from .analysis import Codex, triage
+from .analysis import MCP_BUDGET, Crew, triage
 from .capabilities import (
     capabilities_report, drop_unresolved_secrets, normalize_language, require_codex, require_github,
 )
 from .core import Store, WatsonError, load_config
-from .issue_ref import resolve_issue_ref
+from .issue_ref import repo_note, resolve_issue_target
+from . import roster
 from .language import preferred_language
 from .github import GitHub
 from .oauth_connect import connect_claude, connect_codex
@@ -40,8 +42,8 @@ TOOLS = [
      }},
     {'name': 'watson_investigate',
      'description': 'Investigate a GitHub issue with current code and evidence. '
-                    'Accepts number (e.g. 12), #12 (uses the configured default repository), '
-                    'or a full GitHub issue URL '
+                    'Accepts number (e.g. 12) or #12 (the repository investigated most recently, in the last '
+                    '24h, else the configured default), owner/repo#12, or a full GitHub issue URL '
                     '(e.g. https://github.com/owner/project/issues/12) — that URL\'s repository '
                     'is investigated, not only the default. '
                     'Repo homepage URLs without /issues/N are rejected with a clear ask for the issue link. '
@@ -70,6 +72,20 @@ TOOLS = [
                  'description': 'Language of the investigation text and messages: en or pt '
                                 '(mirror the user).',
              },
+         },
+         'additionalProperties': False,
+     }},
+    {'name': 'watson_squad',
+     'description': 'Show Watson\'s squad (tropa): which team/model/effort plays each role — file '
+                    'selector, investigator, reviewer — and who is logged in. Team Codex and Team Claude '
+                    'check each other. Returns speak_this: relay it exactly. You cannot change the squad: '
+                    'the owner changes it with a short phrase such as "coloca o revisor no opus", '
+                    '"investigador no sol high", "tropa padrão" (EN: "put the reviewer on opus", '
+                    '"default squad"); tell them that phrase.',
+     'inputSchema': {
+         'type': 'object',
+         'properties': {
+             'language': {'type': 'string', 'description': 'Reply language: en or pt (mirror the user).'},
          },
          'additionalProperties': False,
      }},
@@ -167,7 +183,7 @@ def _language_argument(arguments):
 
 
 def _status_result(store, language):
-    caps = capabilities_report(language=language)
+    caps = capabilities_report(language=language, squad=roster.load(store.home))
     history = store.history()
     result = {**history, 'capabilities': caps}
     # Honest top-level flags so agents never invent "all good".
@@ -199,21 +215,51 @@ def _status_result(store, language):
 def _investigate_result(home, store, config, raw, language):
     # Validate the issue ref first so a repo homepage asks for /issues/N
     # instead of being overshadowed by GitHub/Codex preflight messages.
-    repo, number = resolve_issue_ref(raw, config)
+    started = time.monotonic()
+    repo, number, via = resolve_issue_target(raw, config, recent_repo=store.recent_repo())
     # Explicit language (the chat mirrors the owner) > remembered owner language > line default.
     language = language or preferred_language(home, config)
     require_github(language=language)
-    require_codex(language=language)
+    # The squad decides who investigates and who reviews; a team without login is covered by the other.
+    effective = roster.resolve(roster.load(home), roster.connected_teams())
+    if any(effective[r].get('unavailable') for r in ('selector', 'investigator')):
+        require_codex(language=language)  # raises the "connect Codex here in chat" message
     github = GitHub([repo] + config['related_repositories'] + [config['repository']])
-    out = triage(store, github, Codex(home, config.get('model')), config, number, repo=repo,
-                 language=language)
+    crew = Crew(home, effective, deadline=started + MCP_BUDGET)  # one budget for the whole call
+    out = triage(store, github, crew, config, number, repo=repo, language=language)
     action = out['result'].get('issue_action') or {}
+    rules = []
+    note = repo_note(repo, number, via, language, default=config['repository'])
+    lead = None
     if action.get('lead') and action.get('say'):
-        # Deterministic lead line (like speak_this): the chat model must not paraphrase it away.
-        out['speak_first'] = action['say'].get(language) or action['say']['pt']
-        out['instruction'] = ('Start your reply with speak_first exactly, character-for-character, then '
-                              'summarize the rest in the same language. Watson never closes issues and '
-                              'never opens a second draft PR when a linked PR is already open.')
+        lead = action['say'].get(language) or action['say']['pt']
+    if lead:
+        # Deterministic lead (like speak_this): the chat model must not paraphrase it away.
+        # repo_note goes inside it, so the reply has exactly one "start with" rule.
+        out['speak_first'] = f'{note}\n\n{lead}' if note else lead
+        rules.append('Start your reply with speak_first exactly, character-for-character, then summarize '
+                     'the rest in the same language. Watson never closes issues and never opens a second '
+                     'draft PR when a linked PR is already open.')
+    elif note:
+        out['repo_note'] = note
+        rules.append('Start your reply with repo_note exactly, as its own first line.')
+    review = out['result'].get('review') or {}
+    if isinstance(review.get('note'), dict):
+        out['review_note'] = review['note'].get(language) or review['note']['pt']
+        # The chat sees the reviewed findings, never the rejected claims or the reviewer's free text.
+        chat = dict(out['result'])
+        chat['review'] = {k: v for k, v in review.items() if k not in ('removed', 'notes')}
+        chat['review']['removed_count'] = len(review.get('removed') or [])
+        if review.get('status') == 'done' and (review.get('removed') or review.get('weak')):
+            for key in ('summary', 'voice_script', 'next_steps'):
+                chat.pop(key, None)
+            rules.append('The cross-team review removed or downgraded findings: describe ONLY result.findings '
+                         '(say it is a hypothesis when certainty is hypothesis) and state no other claim about '
+                         'the issue.')
+        out['result'] = chat
+        rules.append('End your reply with review_note exactly, as its own last line.')
+    if rules:
+        out['instruction'] = ' '.join(rules)
     return out
 
 
@@ -243,6 +289,11 @@ def dispatch(home, message):
             raw = None
         elif name == 'watson_investigate':
             raw = _issue_argument(arguments)
+        elif name == 'watson_squad':
+            extra = set(arguments) - {'language'}
+            if extra:
+                raise WatsonError('Squad only accepts optional "language".')
+            raw = None
         elif name == 'watson_connect_codex':
             extra = set(arguments) - {'language', 'restart', 'cancel'}
             if extra:
@@ -263,6 +314,10 @@ def dispatch(home, message):
             if name == 'watson_status':
                 # Read-only: do not take the exclusive worker lock.
                 result = _status_result(store, language)
+            elif name == 'watson_squad':
+                speak = roster.render(roster.load(home), roster.connected_teams(), language)
+                result = {'speak_this': speak, 'user_message': speak,
+                          'instruction': 'Your entire reply MUST be exactly speak_this.'}
             elif name == 'watson_connect_codex':
                 result = connect_codex(
                     home,

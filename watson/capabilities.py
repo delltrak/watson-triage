@@ -346,7 +346,33 @@ def _github_setup_steps(github, language):
     }[language]
 
 
-def _onboarding_checklist(github, codex, claude, language, include_github_setup=False):
+_TEAM_JOBS = {
+    'selector': {'pt': 'seleciona', 'en': 'selects'},
+    'investigator': {'pt': 'investiga', 'en': 'investigates'},
+    'reviewer': {'pt': 'revisa', 'en': 'reviews'},
+}
+
+
+def _team_label(team, squad, language, connected=None):
+    """'**Time Codex** (investiga)': the team plus what it actually does now (covering included)."""
+    from .roster import DEFAULT, TEAMS, resolve
+    squad = squad or DEFAULT
+    if connected is not None:
+        squad = resolve(squad, connected)
+    # A role nobody can run right now still shows under the team it belongs to.
+    roles = [r for r, spec in squad.items() if spec.get('engine') == team]
+    if len(roles) > 1 and 'selector' in roles:
+        roles.remove('selector')  # picking files is part of investigating
+    jobs = ' e ' if language == 'pt' else ' and '
+    job = jobs.join(_TEAM_JOBS[r][language] for r in roles) or ('reserva' if language == 'pt' else 'standby')
+    covering = sorted({squad[r]['fallback_from'] for r in roles if squad[r].get('fallback_from')})
+    if covering:
+        other = TEAMS[covering[0]][language]
+        job += f', cobrindo o {other}' if language == 'pt' else f', covering for {other}'
+    return f'**{TEAMS[team][language]}** ({job})'
+
+
+def _onboarding_checklist(github, codex, claude, language, include_github_setup=False, squad=None):
     """Numbered 1/2/3 with bold labels and blank lines between every step."""
     gh = _onboarding_gh_status(github, language)
     cx = _onboarding_codex_status(codex, language)
@@ -354,23 +380,24 @@ def _onboarding_checklist(github, codex, claude, language, include_github_setup=
     step1 = f'1. **GitHub** — {gh}'
     if include_github_setup and not github.get('ok'):
         step1 = f'{step1}\n\n{_github_setup_steps(github, language)}'
+    connected = {'codex': bool(codex.get('ok')), 'claude': bool(claude.get('ok'))}
     return (
         f'{step1}\n'
         f'\n'
-        f'2. **Codex CLI** — {cx}\n'
+        f'2. {_team_label("codex", squad, language, connected)} — {cx}\n'
         f'\n'
-        f'3. **Claude Code CLI** — {cl}'
+        f'3. {_team_label("claude", squad, language, connected)} — {cl}'
     )
 
 
-def _onboarding_copy(github, codex, claude, checklist_en, checklist_pt, setup_messages):
+def _onboarding_copy(github, codex, claude, checklist_en, checklist_pt, setup_messages, squad=None):
     """Ready-to-send first-greeting text. Model should relay, not invent."""
     del checklist_en, checklist_pt, setup_messages  # built fresh below for airy iMessage copy
     gh_ok = bool(github.get('ok'))
     steps_en = _onboarding_checklist(
-        github, codex, claude, 'en', include_github_setup=not gh_ok)
+        github, codex, claude, 'en', include_github_setup=not gh_ok, squad=squad)
     steps_pt = _onboarding_checklist(
-        github, codex, claude, 'pt', include_github_setup=not gh_ok)
+        github, codex, claude, 'pt', include_github_setup=not gh_ok, squad=squad)
     if gh_ok:
         en = (
             "Hey — I'm Watson, your engineering teammate for GitHub issue "
@@ -381,7 +408,7 @@ def _onboarding_copy(github, codex, claude, checklist_en, checklist_pt, setup_me
             'Paste an issue number or link and I will investigate. '
             'Fixes always go out as a **draft PR** (I never merge).\n'
             '\n'
-            'Text /help for commands anytime.'
+            'Text "my squad" to see or change the models. /help for everything.'
         )
         pt = (
             'Oi — sou o Watson, seu colega de engenharia pra triagem de issues '
@@ -392,7 +419,7 @@ def _onboarding_copy(github, codex, claude, checklist_en, checklist_pt, setup_me
             'Manda o número ou o link da issue que eu investigo. '
             'Correção = sempre **draft PR** (nunca faço merge).\n'
             '\n'
-            'Manda /help pra ver comandos.'
+            'Manda "minha tropa" pra ver ou trocar os modelos. /help pra ver tudo.'
         )
     else:
         en = (
@@ -404,10 +431,11 @@ def _onboarding_copy(github, codex, claude, checklist_en, checklist_pt, setup_me
             f'{steps_en}\n'
             '\n'
             'Once everything is connected, I investigate issues by number or '
-            'link, explain what is going on, and open draft PRs when you ask '
-            'for a fix. I never merge.\n'
+            'link and explain what is going on. Fixes always go out as a draft '
+            'PR for human review. I never merge.\n'
             '\n'
-            'Text /help for commands, or tell me when you want to start setup.'
+            'Text "my squad" to see the models, /help for everything, or tell me when you want to '
+            'start setup.'
         )
         pt = (
             'Oi — sou o Watson, seu colega de engenharia pra triagem de issues '
@@ -419,16 +447,30 @@ def _onboarding_copy(github, codex, claude, checklist_en, checklist_pt, setup_me
             f'{steps_pt}\n'
             '\n'
             'Depois que tudo estiver conectado, eu investigo issues por número '
-            'ou link, explico o que está rolando e abro draft PRs quando você '
-            'pedir fix. Nunca faço merge.\n'
+            'ou link e explico o que está rolando. Correção sai sempre como '
+            'draft PR pra revisão humana. Nunca faço merge.\n'
             '\n'
-            'Manda /help pra ver comandos, ou me avisa quando quiser começar '
-            'a configurar.'
+            'Manda "minha tropa" pra ver os modelos, /help pra ver tudo, ou me avisa quando quiser '
+            'começar a configurar.'
         )
     return {'en': en, 'pt': pt}
 
 
-def capabilities_report(language=None, run=subprocess.run):
+def short_greeting(report, language):
+    """One-line greeting once the owner has seen the checklist (no backticks, iMessage)."""
+    pt = language == 'pt'
+    lines = ['Oi! 👋 Manda o número ou o link da issue que eu investigo.' if pt
+             else 'Hey! 👋 Send me the issue number or link and I will investigate.']
+    missing = [team for team, key in (('Codex', 'codex'), ('Claude', 'claude'))
+               if not (report.get(key) or {}).get('connected')]
+    if missing:
+        team = missing[0]
+        lines.append(f'(O Time {team} segue sem login; manda "conecta o {team}" quando quiser.)' if pt
+                     else f'(Team {team} is still not logged in; say "connect {team}" whenever you want.)')
+    return '\n\n'.join(lines)
+
+
+def capabilities_report(language=None, run=subprocess.run, squad=None):
     github = check_github(run=run)
     codex = check_codex(run=run)
     claude = check_claude(run=run)
@@ -436,8 +478,8 @@ def capabilities_report(language=None, run=subprocess.run):
 
     # Airy numbered checklist with markdown bold — iMessage collapses markdown
     # lists; blank lines between steps survive.
-    checklist_en = _onboarding_checklist(github, codex, claude, 'en')
-    checklist_pt = _onboarding_checklist(github, codex, claude, 'pt')
+    checklist_en = _onboarding_checklist(github, codex, claude, 'en', squad=squad)
+    checklist_pt = _onboarding_checklist(github, codex, claude, 'pt', squad=squad)
 
     if github['ok']:
         summary = {
@@ -466,7 +508,7 @@ def capabilities_report(language=None, run=subprocess.run):
         }
 
     onboarding = _onboarding_copy(
-        github, codex, claude, checklist_en, checklist_pt, setup_messages)
+        github, codex, claude, checklist_en, checklist_pt, setup_messages, squad=squad)
 
     # Always-populated ready-to-send copy (greetings + status asks).
     # When language is unset, default speak_this to PT then EN split — models

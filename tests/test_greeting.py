@@ -33,9 +33,12 @@ class ClassifyTests(unittest.TestCase):
             'Oi': 'pt', 'oi!': 'pt', 'oii': 'pt', 'Olá': 'pt', 'ola': 'pt',
             'Ol;a': 'pt',  # typo the owner actually sent
             'Oi Watson': 'pt', 'oi, tudo bem?': 'pt', 'Opa, bom dia!': 'pt', 'oi 👋': 'pt',
-            'bom dia!': 'pt', 'boa noite watson': 'pt', 'quem é você?': 'pt',
+            'bom dia!': 'pt', 'boa noite watson': 'pt',
             'hey': 'en', 'Hi Watson': 'en', 'hello!': 'en', 'hey there': 'en',
-            'who are you?': 'en',
+            # Common openers with a hello (or Watson's name) in them.
+            'oi, como vai?': 'pt', 'Oi, Watson! Como vai?': 'pt', 'oi, tudo joia?': 'pt', 'Bom diaaa': 'pt',
+            'e aí watson, beleza?': 'pt', 'fala watson': 'pt', 'olá watson, tudo bem com você?': 'pt',
+            'hi, how are you?': 'en', "hey, what's up?": 'en', 'hello, how is it going?': 'en',
         }
         for text, lang in cases.items():
             self.assertEqual(classify(text), lang, text)
@@ -49,7 +52,7 @@ class ClassifyTests(unittest.TestCase):
             # Answers / progress asks mid-conversation need context.
             'tudo bem', 'tudo certo', 'opa', 'fala', 'e aí?', 'E aí, tudo certo?',
             'status', 'status?', 'o que falta?', 'tá pronto?', "what's missing?",
-            'bom dia, alguma novidade?',
+            'bom dia, alguma novidade?', 'e ai beleza', 'beleza watson', 'tudo bem?', 'sup',
         ):
             self.assertIsNone(classify(text), text)
 
@@ -106,11 +109,37 @@ class GreetingHookTests(unittest.TestCase):
         env = patch.dict(os.environ, {'HERMES_HOME': str(self.hermes_home)})
         env.start()
         self.addCleanup(env.stop)
+        started = self.started = []
+
+        class BasePlatformAdapter:
+            """plow_chat's busy path: the steer check hops to a thread, then the message is queued."""
+            def __init__(self, platform='plow_chat', turn_ends=True):
+                self.platform = SimpleNamespace(value=platform)
+                self._active_sessions, self._pending_messages = {'k': object()}, {}
+                self.turn_ends = turn_ends
+
+            async def _handle_message_while_active(self, event, session_key):
+                await asyncio.sleep(0)
+                if self.turn_ends:  # the previous turn finishes during the steer check
+                    self._active_sessions.pop(session_key, None)
+                self._pending_messages[session_key] = event
+
+            def _start_session_processing(self, event, session_key):
+                started.append((event, session_key))
+                self._active_sessions[session_key] = object()
+                return True
+
+        self.base = BasePlatformAdapter
         gateway = types.ModuleType('gateway')
         run_turn = types.ModuleType('gateway.run_turn')
         run_turn.GatewayTurnMixin = GatewayTurnMixin
         gateway.run_turn = run_turn
-        modules = patch.dict(sys.modules, {'gateway': gateway, 'gateway.run_turn': run_turn})
+        platforms = types.ModuleType('gateway.platforms')
+        base = types.ModuleType('gateway.platforms.base')
+        base.BasePlatformAdapter = BasePlatformAdapter
+        gateway.platforms, platforms.base = platforms, base
+        modules = patch.dict(sys.modules, {'gateway': gateway, 'gateway.run_turn': run_turn,
+                                           'gateway.platforms': platforms, 'gateway.platforms.base': base})
         modules.start()
         self.addCleanup(modules.stop)
         self.handler = _load(HANDLER, 'watson_greet_handler_under_test')
@@ -228,6 +257,26 @@ class GreetingHookTests(unittest.TestCase):
         patched = self.mixin._run_agent
         self.handler.handle('gateway:startup', {})
         self.assertIs(self.mixin._run_agent, patched)
+
+    def test_follow_up_queued_as_the_session_goes_idle_is_started(self):
+        self.handler.handle('gateway:startup', {})
+        adapter = self.base()
+        asyncio.run(adapter._handle_message_while_active('minha tropa', 'k'))
+        self.assertEqual(self.started, [('minha tropa', 'k')])  # not parked until the next message
+        self.assertEqual(adapter._pending_messages, {})
+        patched = self.base._handle_message_while_active
+        self.handler.handle('gateway:startup', {})
+        self.assertIs(self.base._handle_message_while_active, patched)  # idempotent
+
+    def test_orphan_rescue_leaves_busy_sessions_and_other_platforms_alone(self):
+        self.handler.handle('gateway:startup', {})
+        busy = self.base(turn_ends=False)  # the running turn drains it when it ends, as before
+        asyncio.run(busy._handle_message_while_active('queued', 'k'))
+        self.assertEqual(busy._pending_messages, {'k': 'queued'})
+        other = self.base('telegram')
+        asyncio.run(other._handle_message_while_active('x', 'k'))
+        self.assertEqual(other._pending_messages, {'k': 'x'})
+        self.assertEqual(self.started, [])
 
     def test_unexpected_signature_leaves_gateway_untouched(self):
         async def _run_agent(self, prompt, **kwargs):
@@ -347,6 +396,16 @@ class RuntimeConfigTests(unittest.TestCase):
         empty = {'mcp_servers': None, 'skills': None}
         self.assertTrue(merge(empty, overlay))
         self.assertEqual(empty['skills'], {'platform_disabled': {'plow_chat': ['github']}})
+        with_dirs = {'skills': {'external_dirs': ['/opt/x'], 'platform_disabled': {'plow_chat': ['github']}}}
+        data = {'skills': {'external_dirs': ['/mine']}}
+        self.assertTrue(merge(data, with_dirs))
+        self.assertEqual(data['skills']['external_dirs'], ['/mine', '/opt/x'])
+        # Hermes also accepts one path as a plain string: never split it into characters.
+        scalar = {'skills': {'external_dirs': '/mine', 'platform_disabled': {'plow_chat': 'himalaya'}}}
+        self.assertTrue(merge(scalar, with_dirs))
+        self.assertEqual(scalar['skills']['external_dirs'], ['/mine', '/opt/x'])
+        self.assertEqual(scalar['skills']['platform_disabled']['plow_chat'], ['himalaya', 'github'])
+        self.assertFalse(merge(data, with_dirs))
 
 
 if __name__ == '__main__':
