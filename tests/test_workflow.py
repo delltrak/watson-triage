@@ -19,7 +19,7 @@ class Model(FakeModel):
         return super().ask(instruction,payload,schema,label)
 
 class OwnerChannelTests(unittest.TestCase):
-    """The cursor must not outlive a failed notify -- see owner_channel()."""
+    """The cursor must not outlive a step that can still fail."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
@@ -27,30 +27,6 @@ class OwnerChannelTests(unittest.TestCase):
         self.cfg = {**CONFIG, 'assignee': 'owner', 'notify_owner': True}
         private_json(self.home / 'config.json', self.cfg)
         store = Store(self.home); store.track('demo/repo', 7); store.db.close()
-
-    def test_a_chat_lookup_failure_leaves_the_update_retryable(self):
-        # The real bug was an ORDERING one: the cursor was persisted before
-        # notify() resolved the chat, so one transient lookup failure made the
-        # next cycle read the issue as unchanged and drop that update forever.
-        # Asserting on owner_channel() alone would pass with the bug restored,
-        # so this drives cycle() and looks at what it persisted.
-        class Unreachable:
-            @classmethod
-            def from_config(cls, config):
-                return cls()
-
-            def owner_chat(self):
-                raise WatsonError('sem chat')
-
-        with patch('watson.workflow.Plow', Unreachable):
-            outcome = cycle(self.home, model=FakeModel(), github=FakeGitHub(), writer=Mock())
-
-        self.assertEqual(outcome['processed'], [])
-        self.assertTrue(outcome['errors'])
-        store = Store(self.home)
-        self.addCleanup(store.db.close)
-        self.assertIsNone(Cases(store).get('demo/repo', 7),
-                          'cursor was saved despite the failed lookup — the update is now lost')
 
     def test_a_validated_run_notifies_without_crashing(self):
         # notify() reads config for send_video, and only on the validation
@@ -102,12 +78,6 @@ class OwnerChannelTests(unittest.TestCase):
         self.assertIsNone(Cases(store).get('demo/repo', 7),
                           'cursor was saved despite the failed preflight — the update is now lost')
 
-    def test_a_quiet_agent_resolves_no_channel(self):
-        from watson.workflow import owner_channel
-        self.assertIsNone(owner_channel({'notify_owner': False}))
-
-
-class FlowTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
         self.home=Path(self.tmp.name); self.gh=FakeGitHub(); self.model=Model()

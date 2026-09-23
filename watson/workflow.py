@@ -57,18 +57,6 @@ def compose(model, issue, result, state, validation, private_channel, previous):
     return answer['language'], f'@{issue["author"]}\n\n{body}', answer.get('owner_summary',result['summary'])
 
 
-def owner_channel(config):
-    """Resolve the owner's chat BEFORE the cursor is saved.
-
-    A lookup failure here used to land after `cases.save()`, so the cursor was
-    already persisted and the next cycle read the issue as unchanged -- one
-    transient failure dropped that update permanently, not just once.
-    """
-    if not config.get('notify_owner'): return None
-    plow=Plow.from_config(config)
-    return plow, plow.owner_chat()
-
-
 def notify(store, channel, config, run_id, issue, result, state, validation):
     if not channel: return None
     p, chat = channel
@@ -151,7 +139,14 @@ def cycle(home, *, model=None, github=None, writer=None):
                     # stays after the save is only claiming and sending -- the
                     # operations whose uncertainty the checkpoint exists to
                     # protect against.
-                    channel=owner_channel(config)
+                    # Resolved HERE, before the save, not inside notify(). A
+                    # lookup failure used to land after cases.save(), so the
+                    # cursor was already persisted and the next cycle read the
+                    # issue as unchanged -- one transient failure dropped that
+                    # update permanently, not just once.
+                    channel=None
+                    if config.get('notify_owner'):
+                        plow=Plow.from_config(config); channel=(plow,plow.owner_chat())
                     data={'run_id':run['run_id'],'summary':result['summary'],'questions':result['questions_for_author'],
                           'validation':validation,'previous_state':previous['state'] if previous else None,
                           'author':issue['author'],'head_sha':head,'at':now()}
