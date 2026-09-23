@@ -276,65 +276,166 @@ def claude_status_message(claude, language=None):
     return message_for(_CLAUDE_MISSING, language)
 
 
+def _onboarding_gh_status(github, language):
+    """Short checklist fragment (no product-name prefix)."""
+    if github.get('ok'):
+        login = github.get('login')
+        if language == 'pt':
+            return 'conectado' + (f' como {login}' if login else '') + '.'
+        return 'connected' + (f' as {login}' if login else '') + '.'
+    return {
+        'en': 'not connected yet.',
+        'pt': 'ainda não conectado.',
+    }[language]
+
+
+def _onboarding_codex_status(codex, language):
+    if codex.get('ok'):
+        return {'en': 'available.', 'pt': 'disponível.'}[language]
+    if codex.get('reason') == 'not_authenticated':
+        return {
+            'en': 'installed but not logged in — connect once on this line.',
+            'pt': 'instalado mas sem login — conectar uma vez nesta linha.',
+        }[language]
+    return {
+        'en': 'not available in this environment yet.',
+        'pt': 'ainda não disponível neste ambiente.',
+    }[language]
+
+
+def _onboarding_claude_status(claude, language):
+    if claude.get('ok'):
+        return {'en': 'available.', 'pt': 'disponível.'}[language]
+    if claude.get('reason') == 'not_authenticated':
+        return {
+            'en': 'installed but not logged in — connect once on this line.',
+            'pt': 'instalado mas sem login — conectar uma vez nesta linha.',
+        }[language]
+    return {
+        'en': 'not available in this environment yet.',
+        'pt': 'ainda não disponível neste ambiente.',
+    }[language]
+
+
+def _github_setup_steps(github, language):
+    """Token/install steps only (no lead-in "not connected" sentence)."""
+    if github.get('reason') == 'cli_missing':
+        return {
+            'en': (
+                'Ask the owner to update/restart Watson with the latest piloto '
+                'setup that includes GitHub access, then try again.'
+            ),
+            'pt': (
+                'Peça ao dono para atualizar/reiniciar o Watson com a '
+                'configuração mais recente do piloto que inclui acesso ao '
+                'GitHub e tente de novo.'
+            ),
+        }[language]
+    return {
+        'en': (
+            'Connect GitHub once on the computer that runs Watson:\n'
+            '\n'
+            '1) Create a GitHub token with read access to your repositories '
+            '(GitHub → Settings → Developer settings → Personal access tokens).\n'
+            '\n'
+            '2) In the watson-triage folder, create a private file named '
+            '`github-credentials` with one line: GH_TOKEN=your_token '
+            '(never share or commit this file).\n'
+            '\n'
+            '3) Restart Watson the same way you usually start this pilot, then ask me again.'
+        ),
+        'pt': (
+            'Conecte o GitHub uma vez no computador onde o Watson roda:\n'
+            '\n'
+            '1) Crie um token do GitHub com leitura dos seus repositórios '
+            '(GitHub → Settings → Developer settings → Personal access tokens).\n'
+            '\n'
+            '2) Na pasta watson-triage, crie o arquivo privado `github-credentials` '
+            'com uma linha: GH_TOKEN=seu_token (nunca compartilhe nem versione este arquivo).\n'
+            '\n'
+            '3) Reinicie o Watson como você costuma iniciar este piloto e peça de novo.'
+        ),
+    }[language]
+
+
+def _onboarding_checklist(github, codex, claude, language, include_github_setup=False):
+    """Numbered 1/2/3 with bold labels and blank lines between every step."""
+    gh = _onboarding_gh_status(github, language)
+    cx = _onboarding_codex_status(codex, language)
+    cl = _onboarding_claude_status(claude, language)
+    step1 = f'1. **GitHub** — {gh}'
+    if include_github_setup and not github.get('ok'):
+        step1 = f'{step1}\n\n{_github_setup_steps(github, language)}'
+    return (
+        f'{step1}\n'
+        f'\n'
+        f'2. **Codex CLI** — {cx}\n'
+        f'\n'
+        f'3. **Claude Code CLI** — {cl}'
+    )
+
 
 def _onboarding_copy(github, codex, claude, checklist_en, checklist_pt, setup_messages):
     """Ready-to-send first-greeting text. Model should relay, not invent."""
+    del checklist_en, checklist_pt, setup_messages  # built fresh below for airy iMessage copy
     gh_ok = bool(github.get('ok'))
-    after_ready_en = (
-        'Once GitHub is connected I can investigate an issue by number or link, '
-        'and open a **draft PR** for a fix (I never merge). '
-        'Text `/help` for commands anytime.'
-    )
-    after_ready_pt = (
-        'Quando o GitHub estiver conectado, posso investigar uma issue por número '
-        'ou link e abrir um **draft PR** com a correção (nunca faço merge). '
-        'Manda `/help` se quiser a lista de comandos.'
-    )
+    steps_en = _onboarding_checklist(
+        github, codex, claude, 'en', include_github_setup=not gh_ok)
+    steps_pt = _onboarding_checklist(
+        github, codex, claude, 'pt', include_github_setup=not gh_ok)
     if gh_ok:
         en = (
-            "Hey — I'm Watson, your engineering teammate for GitHub issue triage.\n"
+            "Hey — I'm Watson, your engineering teammate for GitHub issue "
+            'triage. 🔧\n'
             '\n'
-            f'{checklist_en}\n'
+            f'{steps_en}\n'
             '\n'
             'Paste an issue number or link and I will investigate. '
-            'Fixes always go out as a **draft PR** (I never merge). '
-            'Text `/help` for commands.'
+            'Fixes always go out as a **draft PR** (I never merge).\n'
+            '\n'
+            'Text `/help` for commands anytime.'
         )
         pt = (
             'Oi — sou o Watson, seu colega de engenharia pra triagem de issues '
-            'do GitHub.\n'
+            'do GitHub. 🔧\n'
             '\n'
-            f'{checklist_pt}\n'
+            f'{steps_pt}\n'
             '\n'
             'Manda o número ou o link da issue que eu investigo. '
-            'Correção = sempre **draft PR** (nunca faço merge). '
-            'Se quiser os comandos, manda `/help`.'
+            'Correção = sempre **draft PR** (nunca faço merge).\n'
+            '\n'
+            'Manda `/help` pra ver comandos.'
         )
     else:
-        setup_en = (setup_messages or {}).get('en', '')
-        setup_pt = (setup_messages or {}).get('pt', '')
         en = (
-            "Hey — I'm Watson, your engineering teammate for GitHub issue triage.\n"
+            "Hey — I'm Watson, your engineering teammate for GitHub issue "
+            'triage. 🔧\n'
             '\n'
-            'Not ready to investigate yet. Current gaps:\n'
+            "For now I still can't investigate — a few things need connecting:\n"
             '\n'
-            f'{checklist_en}\n'
+            f'{steps_en}\n'
             '\n'
-            f'{setup_en}\n'
+            'Once everything is connected, I investigate issues by number or '
+            'link, explain what is going on, and open draft PRs when you ask '
+            'for a fix. I never merge.\n'
             '\n'
-            f'{after_ready_en}'
+            'Text `/help` for commands, or tell me when you want to start setup.'
         )
         pt = (
             'Oi — sou o Watson, seu colega de engenharia pra triagem de issues '
-            'do GitHub.\n'
+            'do GitHub. 🔧\n'
             '\n'
-            'Ainda não dá pra investigar. O que falta:\n'
+            'Por enquanto ainda não consigo investigar — falta conectar '
+            'algumas coisas:\n'
             '\n'
-            f'{checklist_pt}\n'
+            f'{steps_pt}\n'
             '\n'
-            f'{setup_pt}\n'
+            'Depois que tudo estiver conectado, eu investigo issues por número '
+            'ou link, explico o que está rolando e abro draft PRs quando você '
+            'pedir fix. Nunca faço merge.\n'
             '\n'
-            f'{after_ready_pt}'
+            'Manda `/help` pra ver comandos, ou me avisa quando quiser começar '
+            'a configurar.'
         )
     return {'en': en, 'pt': pt}
 
@@ -345,42 +446,10 @@ def capabilities_report(language=None, run=subprocess.run):
     claude = check_claude(run=run)
     lang = normalize_language(language) if language not in (None, '') else None
 
-    if github['ok']:
-        gh_line_en = (
-            'GitHub connected'
-            + (f" as {github['login']}" if github.get('login') else '')
-            + '.'
-        )
-        gh_line_pt = (
-            'GitHub conectado'
-            + (f" como {github['login']}" if github.get('login') else '')
-            + '.'
-        )
-    else:
-        gh_line_en = 'GitHub not connected.'
-        gh_line_pt = 'GitHub não conectado.'
-
-    codex_en = codex_status_message(codex, 'en')
-    codex_pt = codex_status_message(codex, 'pt')
-    claude_en = claude_status_message(claude, 'en')
-    claude_pt = claude_status_message(claude, 'pt')
-
-    # Plain-text numbered checklist with blank lines between items — iMessage
-    # collapses markdown lists; blank lines survive.
-    checklist_en = (
-        f'1. GitHub — {gh_line_en}\n'
-        f'\n'
-        f'2. Codex CLI — {codex_en}\n'
-        f'\n'
-        f'3. Claude Code CLI — {claude_en}'
-    )
-    checklist_pt = (
-        f'1. GitHub — {gh_line_pt}\n'
-        f'\n'
-        f'2. Codex CLI — {codex_pt}\n'
-        f'\n'
-        f'3. Claude Code CLI — {claude_pt}'
-    )
+    # Airy numbered checklist with markdown bold — iMessage collapses markdown
+    # lists; blank lines between steps survive.
+    checklist_en = _onboarding_checklist(github, codex, claude, 'en')
+    checklist_pt = _onboarding_checklist(github, codex, claude, 'pt')
 
     if github['ok']:
         summary = {
