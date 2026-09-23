@@ -107,9 +107,11 @@ def _status_result(store, language):
 
 
 def _investigate_result(home, store, config, raw, language):
+    # Validate the issue ref first so a repo homepage asks for /issues/N
+    # instead of being overshadowed by GitHub/Codex preflight messages.
+    repo, number = resolve_issue_ref(raw, config)
     require_github(language=language)
     require_codex(language=language)
-    repo, number = resolve_issue_ref(raw, config)
     github = GitHub([repo] + config['related_repositories'] + [config['repository']])
     return triage(store, github, Codex(home, config.get('model')), config, number, repo=repo)
 
