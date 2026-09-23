@@ -31,7 +31,9 @@ e a integração, preservando inicialização, identidade e contratos da base.
 `watson --home /caminho/estado mcp` atende MCP por stdio e oferece:
 
 - `watson_status`: histórico local.
-- `watson_investigate(number)`: investigação no único repositório configurado.
+- `watson_investigate`: investigação no único repositório configurado. Aceita
+  `number` (inteiro) **ou** `issue` (texto: `12`, `#12` ou URL
+  `https://github.com/dono/repo/issues/12`).
 
 Não há ferramenta MCP para enviar mensagens, alterar destinatários, escrever
 comentários, criar branches ou fazer merge. Argumentos extras são recusados.
