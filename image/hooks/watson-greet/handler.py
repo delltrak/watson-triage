@@ -11,6 +11,9 @@ It runs after Hermes admission/auth, slash commands and session resolution;
 the gateway then shapes, persists and delivers the synthetic result like any
 other turn (the greeting + reply land in the transcript). Every failure falls
 back to the normal LLM path.
+
+It also answers /help on Plow with Watson's own help (command:help hook
+decision), instead of the stock Hermes command list.
 """
 from __future__ import annotations
 
@@ -173,10 +176,29 @@ def _install() -> None:
     print("[watson-greet] patched GatewayTurnMixin._run_agent (owner DM greetings -> speak_this)", flush=True)
 
 
+def _help_decision(context):
+    """Watson /help on Plow; None keeps Hermes' own /help (other platforms, /help skills)."""
+    if (context or {}).get("platform") != _PLATFORM:
+        return None
+    from watson.chat_help import help_language, help_text
+
+    language = help_language((context or {}).get("args"))
+    if language is None:
+        return None
+    return {"decision": "handled", "message": help_text(language)}
+
+
 def handle(event_type, context):
+    if event_type == "command:help":
+        try:
+            return _help_decision(context)
+        except Exception as exc:  # fall back to the Hermes list
+            print(f"[watson-greet] /help failed; Hermes help used: {exc}", flush=True)
+            return None
     if event_type != "gateway:startup":
-        return
+        return None
     try:
         _install()
     except Exception as exc:  # never block gateway boot
         print(f"[watson-greet] install failed; LLM path unchanged: {exc}", flush=True)
+    return None

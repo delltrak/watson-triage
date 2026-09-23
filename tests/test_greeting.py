@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from watson.chat_help import help_language, help_text
 from watson.greeting import classify, greeting_reply
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -204,6 +205,50 @@ class GreetingHookTests(unittest.TestCase):
         self.handler.handle('gateway:startup', {})
         self.assertIs(self.mixin._run_agent, _run_agent)
         self.assertFalse(self.mixin.__dict__.get('_watson_greet_patched', False))
+
+
+class ChatHelpTests(unittest.TestCase):
+    def test_watson_help_not_hermes(self):
+        for lang in ('pt', 'en'):
+            text = help_text(lang)
+            self.assertIn('Watson', text)
+            self.assertIn('**draft PR**', text)
+            self.assertIn('/new', text)
+            for banned in ('Hermes', '`', 'github-credentials', 'GH_TOKEN', '/start', '/topic'):
+                self.assertNotIn(banned, text, (lang, banned))
+        self.assertIn('Investigar uma issue', help_text('pt'))
+        self.assertIn('Nunca faço merge', help_text('pt'))
+        self.assertIn('Investigate an issue', help_text('en'))
+
+    def test_help_language_args(self):
+        self.assertEqual(help_language(''), 'pt')
+        self.assertEqual(help_language(None), 'pt')
+        self.assertEqual(help_language(' EN '), 'en')
+        self.assertEqual(help_language('pt'), 'pt')
+        # Anything else keeps the stock Hermes /help (e.g. /help skills).
+        self.assertIsNone(help_language('skills'))
+
+    def test_hook_answers_help_on_plow_only(self):
+        handler = _load(HANDLER, 'watson_greet_handler_help_test')
+        decision = handler.handle('command:help', {'platform': 'plow_chat', 'args': ''})
+        self.assertEqual(decision, {'decision': 'handled', 'message': help_text('pt')})
+        decision = handler.handle('command:help', {'platform': 'plow_chat', 'args': 'en'})
+        self.assertEqual(decision['message'], help_text('en'))
+        self.assertIsNone(handler.handle('command:help', {'platform': 'plow_chat', 'args': 'skills'}))
+        self.assertIsNone(handler.handle('command:help', {'platform': 'telegram', 'args': ''}))
+        self.assertIsNone(handler.handle('command:new', {'platform': 'plow_chat', 'args': ''}))
+
+    def test_onboarding_copy_has_no_backticks(self):
+        from watson.capabilities import capabilities_report
+        fake = {'ok': False, 'reason': 'not_authenticated', 'connected': False, 'login': None}
+        for gh in (fake, {'ok': True, 'reason': 'token_env', 'connected': True, 'login': 'x'}):
+            with patch('watson.capabilities.check_github', return_value=gh), \
+                 patch('watson.capabilities.check_codex', return_value=fake), \
+                 patch('watson.capabilities.check_claude', return_value=fake):
+                for lang in ('pt', 'en'):
+                    speak = capabilities_report(language=lang)['speak_this']
+                    self.assertNotIn('`', speak)
+                    self.assertIn('/help', speak)
 
 
 class RuntimeConfigTests(unittest.TestCase):

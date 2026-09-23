@@ -381,7 +381,7 @@ def _onboarding_copy(github, codex, claude, checklist_en, checklist_pt, setup_me
             'Paste an issue number or link and I will investigate. '
             'Fixes always go out as a **draft PR** (I never merge).\n'
             '\n'
-            'Text `/help` for commands anytime.'
+            'Text /help for commands anytime.'
         )
         pt = (
             'Oi — sou o Watson, seu colega de engenharia pra triagem de issues '
@@ -392,7 +392,7 @@ def _onboarding_copy(github, codex, claude, checklist_en, checklist_pt, setup_me
             'Manda o número ou o link da issue que eu investigo. '
             'Correção = sempre **draft PR** (nunca faço merge).\n'
             '\n'
-            'Manda `/help` pra ver comandos.'
+            'Manda /help pra ver comandos.'
         )
     else:
         en = (
@@ -407,7 +407,7 @@ def _onboarding_copy(github, codex, claude, checklist_en, checklist_pt, setup_me
             'link, explain what is going on, and open draft PRs when you ask '
             'for a fix. I never merge.\n'
             '\n'
-            'Text `/help` for commands, or tell me when you want to start setup.'
+            'Text /help for commands, or tell me when you want to start setup.'
         )
         pt = (
             'Oi — sou o Watson, seu colega de engenharia pra triagem de issues '
@@ -422,7 +422,7 @@ def _onboarding_copy(github, codex, claude, checklist_en, checklist_pt, setup_me
             'ou link, explico o que está rolando e abro draft PRs quando você '
             'pedir fix. Nunca faço merge.\n'
             '\n'
-            'Manda `/help` pra ver comandos, ou me avisa quando quiser começar '
+            'Manda /help pra ver comandos, ou me avisa quando quiser começar '
             'a configurar.'
         )
     return {'en': en, 'pt': pt}

@@ -1,7 +1,9 @@
 name: watson-greet
 description: >
-  Owner Plow DM greetings / status openers are answered with the exact
+  Owner Plow DM plain-text greetings are answered with the exact
   watson_status speak_this (no LLM call), so connection status cannot be
-  paraphrased or invented. Falls back to the LLM on any error.
+  paraphrased or invented. Falls back to the LLM on any error. Also answers
+  /help on Plow with Watson's own help instead of the Hermes command list.
 events:
   - gateway:startup
+  - command:help

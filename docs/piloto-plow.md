@@ -145,6 +145,9 @@ honesto e pede para conectar.
   silêncio (`NO_REPLY`) do mesmo jeito. O turno vai para o transcript
   normalmente. Qualquer outra mensagem (pedido, pergunta de status, foto,
   resposta citando outra mensagem, grupo, não-dono) segue pelo LLM + tools.
+- `/help` na Plow responde o help do Watson (`watson/chat_help.py`, hook
+  `command:help`) em vez da lista de comandos do Hermes; `/help en` em inglês.
+  Outros argumentos (`/help skills`) seguem para o help do Hermes.
 - Codex/Claude: login via chat (`watson_connect_codex` / `watson_connect_claude`);
   credenciais ficam em `/var/lib/hermes/.codex` e `/var/lib/hermes/.claude*`.
 
