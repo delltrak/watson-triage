@@ -18,15 +18,8 @@ class Model(FakeModel):
             return {'language':'en','body':'Please provide a test account through the private channel. Do not post credentials here.'}
         return super().ask(instruction,payload,schema,label)
 
-class OwnerChannelTests(unittest.TestCase):
+class FlowTests(unittest.TestCase):
     """The cursor must not outlive a step that can still fail."""
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
-        self.home = Path(self.tmp.name)
-        self.cfg = {**CONFIG, 'assignee': 'owner', 'notify_owner': True}
-        private_json(self.home / 'config.json', self.cfg)
-        store = Store(self.home); store.track('demo/repo', 7); store.db.close()
 
     def test_a_validated_run_notifies_without_crashing(self):
         # notify() reads config for send_video, and only on the validation
