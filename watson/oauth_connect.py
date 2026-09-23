@@ -119,21 +119,28 @@ def _waiter_pid_path(home: Path, provider: str) -> Path:
 
 
 def _clear_session(home: Path, provider: str) -> None:
-    state = _load_state(home, provider)
+    """Stop waiter first, then login — avoids a race that posts false fail pings."""
+    state = _load_state(home, provider) or {}
+    # Mark cancelled so a racing waiter exits without notifying.
     if state:
-        _terminate_pid(state.get('pid'))
-        _terminate_pid(state.get('waiter_pid'))
+        state['status'] = 'cancelled'
+        try:
+            _save_state(home, provider, state)
+        except OSError:
+            pass
+    try:
+        waiter_pid = int(_waiter_pid_path(home, provider).read_text().strip())
+    except (OSError, ValueError):
+        waiter_pid = None
+    _terminate_pid(state.get('waiter_pid'))
+    _terminate_pid(waiter_pid)
     holder = _oauth_dir(home) / f'{provider}.stdin_holder.pid'
     try:
         holder_pid = int(holder.read_text().strip())
     except (OSError, ValueError):
         holder_pid = None
     _terminate_pid(holder_pid)
-    try:
-        waiter_pid = int(_waiter_pid_path(home, provider).read_text().strip())
-    except (OSError, ValueError):
-        waiter_pid = None
-    _terminate_pid(waiter_pid)
+    _terminate_pid(state.get('pid'))
     for path in (
         _state_path(home, provider),
         _pid_path(home, provider),
@@ -443,7 +450,10 @@ def wait_and_notify(home, provider: str, language=None, timeout: float = DEFAULT
     while time.time() < deadline:
         if _auth_ok(provider):
             return push_auth_notification(home, provider, 'completed', language, plow=plow)
-        state = _load_state(home, provider) or {}
+        state = _load_state(home, provider)
+        if state is None:
+            # Session cleared (cancel/restart) — do not notify failure.
+            return {'skipped': True, 'reason': 'session_cleared'}
         if state.get('status') in {'cancelled'}:
             return {'skipped': True, 'reason': 'cancelled'}
         if isinstance(state.get('notified'), dict):
@@ -457,10 +467,17 @@ def wait_and_notify(home, provider: str, language=None, timeout: float = DEFAULT
                 if _auth_ok(provider):
                     return push_auth_notification(
                         home, provider, 'completed', language, plow=plow)
+                # Re-check cancel mid-grace.
+                mid = _load_state(home, provider)
+                if mid is None or mid.get('status') == 'cancelled':
+                    return {'skipped': True, 'reason': 'cancelled'}
                 time.sleep(0.4)
             if _auth_ok(provider):
                 return push_auth_notification(
                     home, provider, 'completed', language, plow=plow)
+            mid = _load_state(home, provider)
+            if mid is None or mid.get('status') == 'cancelled':
+                return {'skipped': True, 'reason': 'cancelled'}
             return push_auth_notification(home, provider, 'failed', language, plow=plow)
         time.sleep(poll_sec)
     if _auth_ok(provider):

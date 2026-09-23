@@ -634,6 +634,28 @@ class OAuthNotifyTests(unittest.TestCase):
         self.assertEqual(result.get('outcome'), 'completed')
         self.assertEqual(result.get('body'), 'Codex connected ✅')
 
+    def test_wait_and_notify_skips_when_session_cleared(self):
+        class FakePlow:
+            def __init__(self):
+                self.sent = []
+
+            def owner_chat(self):
+                return 'cht_test'
+
+            def send(self, chat, body, audio=None):
+                self.sent.append(body)
+                return {'message_uid': 'x', 'chat_uid': chat}
+
+        plow = FakePlow()
+        with patch('watson.oauth_connect._auth_ok', return_value=False), \
+             patch('watson.oauth_connect._load_state', return_value=None):
+            result = wait_and_notify(
+                self.home, 'codex', language='pt', timeout=2, poll_sec=0.01,
+                plow=plow)
+        self.assertTrue(result.get('skipped'))
+        self.assertEqual(result.get('reason'), 'session_cleared')
+        self.assertEqual(plow.sent, [])
+
     def test_connect_codex_spawns_waiter(self):
         class FakeProc:
             pid = 4242
