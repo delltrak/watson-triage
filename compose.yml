@@ -5,7 +5,14 @@ services:
     build: .
     # Credencial da linha Plow: `plow-agents mint` / `plow-agents deploy --local`.
     # PLOW_CREDENTIALS aponta para um arquivo fora do checkout se preferir.
-    env_file: ${PLOW_CREDENTIALS:-./plow-credentials}
+    env_file:
+      - ${PLOW_CREDENTIALS:-./plow-credentials}
+      # GitHub para o agente (GH_TOKEN=...). Arquivo gitignored; optional until connected.
+      - path: ${GITHUB_CREDENTIALS:-./github-credentials}
+        required: false
+    environment:
+      # Host export also works: GH_TOKEN=... docker compose up
+      GH_TOKEN: ${GH_TOKEN:-}
     volumes:
       # Home Hermes: sessões, config e estado Watson em /var/lib/hermes/watson.
       - agent-home:/var/lib/hermes

@@ -6,30 +6,48 @@ import sys
 from pathlib import Path
 
 from .analysis import Codex, triage
+from .capabilities import capabilities_report, normalize_language, require_github
 from .core import Store, WatsonError, load_config
 from .issue_ref import resolve_issue_number
 from .github import GitHub
 
 
 TOOLS = [
-    {'name': 'watson_status', 'description': 'Consultar issues acompanhadas e histórico de triagens.',
-     'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}},
+    {'name': 'watson_status',
+     'description': 'Check whether GitHub (and Codex) are connected, plus tracked issues '
+                    'and triage history. Always call this before claiming investigation works. '
+                    'Optional language: en, pt, or auto (returns bilingual setup text when omitted).',
+     'inputSchema': {
+         'type': 'object',
+         'properties': {
+             'language': {
+                 'type': 'string',
+                 'description': 'Reply language for status/setup text: en, pt, or auto.',
+             },
+         },
+         'additionalProperties': False,
+     }},
     {'name': 'watson_investigate',
-     'description': 'Investigar uma issue no repositório configurado, com código e evidências atuais. '
-                    'Aceita o número (ex.: 12), #12, ou o link completo do GitHub '
-                    '(ex.: https://github.com/dono/projeto/issues/12). '
-                    'Pode consumir a assinatura Codex. Não envia mensagens nem escreve no GitHub.',
+     'description': 'Investigate an issue in the configured repository with current code and evidence. '
+                    'Accepts number (e.g. 12), #12, or full GitHub URL '
+                    '(e.g. https://github.com/owner/project/issues/12). '
+                    'If GitHub is not connected, returns clear setup instructions instead of pretending. '
+                    'May use the Codex subscription. Does not send messages or write to GitHub.',
      'inputSchema': {
          'type': 'object',
          'properties': {
              'issue': {
                  'type': 'string',
-                 'description': 'Link da issue, #123 ou número em texto.',
+                 'description': 'Issue link, #123, or number as text.',
              },
              'number': {
                  'type': 'integer',
                  'minimum': 1,
-                 'description': 'Número da issue (alternativa a issue).',
+                 'description': 'Issue number (alternative to issue).',
+             },
+             'language': {
+                 'type': 'string',
+                 'description': 'Language for error/setup messages: en, pt, or auto.',
              },
          },
          'additionalProperties': False,
@@ -38,16 +56,22 @@ TOOLS = [
 
 
 def _issue_argument(arguments):
-    keys = set(arguments)
+    keys = set(arguments) - {'language'}
     if keys == {'number'}:
         return arguments['number']
     if keys == {'issue'}:
         return arguments['issue']
     if keys == {'issue', 'number'}:
-        raise WatsonError('Envie só o link/número em "issue" ou só o "number", não os dois.')
+        raise WatsonError('Send only the link/number in "issue" or only "number", not both.')
     if not keys:
-        raise WatsonError('Me diga o número da issue ou cole o link do GitHub.')
-    raise WatsonError('Para investigar, use só "issue" (link ou número) ou só "number".')
+        raise WatsonError('Tell me the issue number or paste the GitHub link.')
+    raise WatsonError('To investigate, use only "issue" (link or number) or only "number".')
+
+
+def _language_argument(arguments):
+    if 'language' not in arguments:
+        return None
+    return normalize_language(arguments.get('language'))
 
 
 def dispatch(home, message):
@@ -63,27 +87,37 @@ def dispatch(home, message):
     if method == 'tools/list':
         return {'tools': TOOLS}
     if method != 'tools/call':
-        raise LookupError('Método não suportado.')
+        raise LookupError('Method not supported.')
     params = message.get('params', {})
     name, arguments = params.get('name'), params.get('arguments', {})
     try:
         if not isinstance(arguments, dict):
-            raise WatsonError('Argumentos inválidos.')
-        if name == 'watson_status' and arguments:
-            raise WatsonError('Status não aceita argumentos.')
-        if name == 'watson_investigate':
+            raise WatsonError('Invalid arguments.')
+        language = _language_argument(arguments)
+        if name == 'watson_status':
+            extra = set(arguments) - {'language'}
+            if extra:
+                raise WatsonError('Status only accepts optional "language".')
+        elif name == 'watson_investigate':
             raw = _issue_argument(arguments)
-        elif name != 'watson_status':
-            raise WatsonError('Ferramenta não disponível.')
         else:
-            raw = None
+            raise WatsonError('Tool not available.')
         store = Store(home)
         try:
             config = load_config(Path(home))
             with store.lock():
                 if name == 'watson_status':
-                    result = store.history()
+                    caps = capabilities_report(language=language)
+                    history = store.history()
+                    result = {**history, 'capabilities': caps}
+                    # Honest top-level flags so agents never invent "all good".
+                    result['github_connected'] = caps['github']['connected']
+                    result['ready_to_investigate'] = caps['ready_to_investigate']
+                    result['status_summary'] = caps['summary']
+                    if 'setup' in caps:
+                        result['setup'] = caps['setup']
                 else:
+                    require_github(language=language)
                     number = resolve_issue_number(raw, config)
                     github = GitHub([config['repository']] + config['related_repositories'])
                     result = triage(store, github, Codex(home, config.get('model')), config, number)
@@ -92,7 +126,7 @@ def dispatch(home, message):
             store.db.close()
     except Exception as exc:
         # Runtime errors may include URLs or credentials; only expose curated errors.
-        text = str(exc) if isinstance(exc, WatsonError) else 'Falha interna; consulte a instalação local.'
+        text = str(exc) if isinstance(exc, WatsonError) else 'Internal failure; check the local install.'
         return {'content': [{'type': 'text', 'text': text}], 'isError': True}
 
 
@@ -102,7 +136,7 @@ def serve(home, incoming=sys.stdin, outgoing=sys.stdout):
         try:
             message = json.loads(line)
             if not isinstance(message, dict) or message.get('jsonrpc') != '2.0':
-                raise ValueError('Requisição JSON-RPC inválida.')
+                raise ValueError('Invalid JSON-RPC request.')
             if 'id' not in message:
                 continue
             response = {'jsonrpc': '2.0', 'id': message['id'], 'result': dispatch(home, message)}

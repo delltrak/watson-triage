@@ -39,5 +39,21 @@ for path in (
     print(f"seeded watson mcp into {path}")
 PY
 
+# GitHub CLI: watson_investigate uses `gh api`. Auth via GH_TOKEN (see compose).
+# Official apt repo from cli.github.com.
+RUN set -eu; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates curl gnupg; \
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg; \
+    chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg; \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends gh; \
+    rm -rf /var/lib/apt/lists/*; \
+    gh --version
+
+
 # Estado Watson sob o home Hermes (volume agent-home). Criado de novo no boot.
 COPY --chmod=0755 image/cont-init.d/20-watson-mcp /etc/cont-init.d/20-watson-mcp

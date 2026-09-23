@@ -28,11 +28,14 @@ leitura: `watson_status` e `watson_investigate` (ver [hermes-plow.md](hermes-plo
 - Linha iMessage Plow **já existente** (mesma do piloto atual)
 - Checkout deste repositório na branch `piloto`
 
-Credenciais GitHub (`gh`) e Codex no *host* continuam necessárias para a
-investigação completa funcionar dentro do container; neste recorte o importante
-é a imagem **subir** e falar na linha Plow. Sem `gh`/Codex autenticados no
-ambiente do agente, `watson_investigate` pode falhar — isso é gap conhecido do
-piloto chat-first, não bloqueio deste scaffolding.
+GitHub no container: a imagem instala o CLI `gh`. A autenticação entra pelo
+arquivo local **`github-credentials`** (gitignored) com `GH_TOKEN=...`, carregado
+pelo `compose.yml` (opcional até existir). Sem esse token, `watson_status` e
+`watson_investigate` **dizem claramente** que o GitHub não está conectado e
+passam instruções bilíngues (en/pt) — nunca fingem que está tudo ok.
+
+Codex local continua necessário para a inferência completa da investigação;
+falta de Codex também aparece no status.
 
 ## Pin da imagem base
 
@@ -99,11 +102,38 @@ plow-agents mint ln_XXXXXXXX --credential-file ./plow-credentials
 docker compose up --build
 ```
 
+
+## Conectar o GitHub (uma vez, no Mac do piloto)
+
+O login `gh` do macOS usa o keychain — montar `~/.config/gh` **não** leva o token
+para o container. Caminho suportado:
+
+1. Crie um token com leitura dos repositórios (GitHub → Settings → Developer
+   settings → Personal access tokens), **ou** exporte o token já logado no host:
+   `gh auth token` (não cole o valor em chats/logs).
+2. No checkout `watson-triage`, copie o exemplo e preencha:
+
+   ```sh
+   cp github-credentials.example github-credentials
+   # edite github-credentials: uma linha GH_TOKEN=...
+   chmod 600 github-credentials
+   ```
+
+3. Recrie o agente para carregar o arquivo:
+
+   ```sh
+   docker compose up --build -d
+   ```
+
+Depois disso, `watson_status` deve reportar GitHub conectado e
+`watson_investigate` pode consultar issues. Sem o arquivo, o status fica
+honesto e pede para conectar.
+
 ## O que NÃO fazer
 
 - Não usar `plow-openclaw-agent` nem qualquer stack OpenClaw neste piloto.
 - Não fazer push para `main` a partir deste recorte.
-- Não commitar `plow-credentials`, `.env` ou tokens.
+- Não commitar `plow-credentials`, `github-credentials`, `.env` ou tokens.
 - Não tratar Plow Latch como dependência obrigatória deste scaffolding.
 - Não fazer merge de PRs pelo agente — correção = draft PR.
 
@@ -113,7 +143,8 @@ docker compose up --build
 |---|---|---|
 | Credencial da linha Plow | `plow-credentials` ou `PLOW_CREDENTIALS` | Escopo da linha; mint/rotate via plow-agents |
 | Home Hermes + Watson | volume Docker `agent-home` → `/var/lib/hermes` | Estado em `/var/lib/hermes/watson` |
-| GitHub / Codex | ambiente do container / volume | Fora do escopo deste recorte; necessário para investigar de verdade |
+| GitHub (`GH_TOKEN`) | `./github-credentials` (gitignore) ou env `GH_TOKEN` | Ver seção abaixo; nunca commitar |
+| Codex | ambiente do container / login local | Necessário para inferência da investigação |
 
 ## Referências
 

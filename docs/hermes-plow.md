@@ -50,7 +50,7 @@ mcp_servers:
     connect_timeout: 30
 ```
 
-O processo da ponte deve encontrar `gh` e `codex` autenticados. Esse exemplo não
+O processo da ponte deve encontrar `gh` e `codex` autenticados. `watson_status` reporta se o GitHub está conectado; sem auth, `watson_investigate` devolve instruções bilíngues de conexão (nunca “tudo ok”). No piloto Docker, use `github-credentials` + `GH_TOKEN` (ver [piloto-plow.md](piloto-plow.md)). Esse exemplo não
 foi carregado em um gateway Hermes real. Não copiar o ambiente pessoal inteiro
 ou credenciais de escrita para dentro de uma imagem pública.
 

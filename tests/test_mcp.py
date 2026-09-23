@@ -5,6 +5,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from watson.capabilities import (
+    capabilities_report,
+    check_github,
+    github_missing_message,
+    require_github,
+)
 from watson.core import Store, WatsonError, private_json
 from watson.issue_ref import parse_issue_ref, resolve_issue_number
 from watson.mcp import dispatch, serve
@@ -43,6 +49,55 @@ class IssueRefTests(unittest.TestCase):
         self.assertNotIn('branch', str(ctx.exception).lower())
 
 
+class CapabilityTests(unittest.TestCase):
+    def test_github_missing_messages_bilingual_and_junior_friendly(self):
+        github = {'ok': False, 'reason': 'not_authenticated'}
+        both = github_missing_message(github, None)
+        self.assertIn('GitHub is not connected', both)
+        self.assertIn('O GitHub ainda não está conectado', both)
+        self.assertNotIn('Docker', both)
+        self.assertNotIn('PAT', both)
+        self.assertNotIn('compose', both.lower())
+        en = github_missing_message(github, 'en')
+        pt = github_missing_message(github, 'pt')
+        self.assertIn('github-credentials', en)
+        self.assertIn('github-credentials', pt)
+        self.assertNotIn('O GitHub ainda', en)
+        self.assertNotIn('GitHub is not connected', pt)
+
+    def test_check_github_reports_missing_cli(self):
+        with patch('watson.capabilities.shutil.which', return_value=None):
+            result = check_github()
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['reason'], 'cli_missing')
+
+    def test_check_github_ok_via_auth_status(self):
+        class Result:
+            returncode = 0
+            stdout = ''
+            stderr = 'Logged in to github.com account delltrak (keyring)'
+
+        def fake_run(cmd, **kwargs):
+            return Result()
+
+        with patch('watson.capabilities.shutil.which', return_value='/usr/bin/gh'):
+            result = check_github(run=fake_run)
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['login'], 'delltrak')
+
+    def test_capabilities_report_never_all_ok_when_gh_missing(self):
+        fake_gh = {'ok': False, 'reason': 'not_authenticated', 'connected': False, 'login': None}
+        fake_codex = {'ok': True, 'reason': 'cli_present', 'connected': True}
+        with patch('watson.capabilities.check_github', return_value=fake_gh), \
+             patch('watson.capabilities.check_codex', return_value=fake_codex):
+            report = capabilities_report(language='en')
+        self.assertFalse(report['ready_to_investigate'])
+        self.assertFalse(report['github']['connected'])
+        self.assertIn('Not ready to investigate', report['summary'])
+        self.assertNotIn('tudo ok', report['summary'].lower())
+        self.assertIn('not connected', report['summary'].lower())
+
+
 class MCPTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -61,7 +116,15 @@ class MCPTests(unittest.TestCase):
             {'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call', 'params': {'name': 'watson_status', 'arguments': {}}},
         ]))
         output = io.StringIO()
-        serve(self.home, source, output)
+        with patch('watson.mcp.capabilities_report', return_value={
+            'github': {'connected': False, 'reason': 'cli_missing', 'login': None},
+            'codex': {'connected': False, 'reason': 'cli_missing'},
+            'ready_to_investigate': False,
+            'summary': 'Not ready',
+            'messages': {'en': 'Not ready', 'pt': 'Não pronto'},
+            'setup': 'connect please',
+        }):
+            serve(self.home, source, output)
         messages = [json.loads(line) for line in output.getvalue().splitlines()]
         self.assertEqual(len(messages), 3)
         self.assertEqual(messages[0]['result']['protocolVersion'], '2025-06-18')
@@ -70,7 +133,67 @@ class MCPTests(unittest.TestCase):
         props = tools['watson_investigate']['inputSchema']['properties']
         self.assertIn('issue', props)
         self.assertIn('number', props)
+        self.assertIn('language', props)
         self.assertFalse(messages[2]['result']['isError'])
+        payload = json.loads(messages[2]['result']['content'][0]['text'])
+        self.assertFalse(payload['github_connected'])
+        self.assertFalse(payload['ready_to_investigate'])
+
+    def test_status_reports_missing_github_in_portuguese(self):
+        fake = {
+            'github': {'connected': False, 'reason': 'not_authenticated', 'login': None},
+            'codex': {'connected': False, 'reason': 'cli_missing'},
+            'ready_to_investigate': False,
+            'summary': 'Ainda não dá para investigar: falta o GitHub.',
+            'messages': {'pt': 'Ainda não dá para investigar: falta o GitHub.'},
+            'setup': 'O GitHub ainda não está conectado',
+        }
+        with patch('watson.mcp.capabilities_report', return_value=fake) as caps:
+            response = dispatch(self.home, {
+                'method': 'tools/call',
+                'params': {'name': 'watson_status', 'arguments': {'language': 'pt'}},
+            })
+        caps.assert_called_once()
+        self.assertEqual(caps.call_args.kwargs.get('language'), 'pt')
+        self.assertFalse(response['isError'])
+        payload = json.loads(response['content'][0]['text'])
+        self.assertFalse(payload['ready_to_investigate'])
+        self.assertIn('falta o GitHub', payload['status_summary'])
+        self.assertIn('O GitHub ainda não está conectado', payload['setup'])
+
+    def test_investigate_preflight_blocks_when_github_missing(self):
+        with patch('watson.mcp.require_github', side_effect=WatsonError(
+                'GitHub is not connected yet, so I cannot investigate issues.\n\n'
+                '---\n\n'
+                'O GitHub ainda não está conectado, então não consigo investigar issues.')):
+            response = dispatch(self.home, {
+                'method': 'tools/call',
+                'params': {
+                    'name': 'watson_investigate',
+                    'arguments': {'number': 1},
+                },
+            })
+        self.assertTrue(response['isError'])
+        text = response['content'][0]['text']
+        self.assertIn('GitHub is not connected', text)
+        self.assertIn('O GitHub ainda não está conectado', text)
+        self.assertNotIn('Docker', text)
+        self.assertNotIn('PAT', text)
+
+    def test_investigate_preflight_language_en(self):
+        with patch('watson.mcp.require_github', side_effect=WatsonError(
+                'GitHub is not connected yet, so I cannot investigate issues.')) as req:
+            response = dispatch(self.home, {
+                'method': 'tools/call',
+                'params': {
+                    'name': 'watson_investigate',
+                    'arguments': {'number': 3, 'language': 'en'},
+                },
+            })
+        req.assert_called_once()
+        self.assertEqual(req.call_args.kwargs.get('language'), 'en')
+        self.assertTrue(response['isError'])
+        self.assertIn('GitHub is not connected', response['content'][0]['text'])
 
     def test_arbitrary_actions_and_repositories_rejected(self):
         for name, arguments in [('merge', {}), ('deliver', {}),
@@ -84,7 +207,8 @@ class MCPTests(unittest.TestCase):
 
     def test_investigate_accepts_url_via_issue_argument(self):
         fake = {'run_id': 1, 'cached': True, 'result': {'summary': 'ok'}}
-        with patch('watson.mcp.triage', return_value=fake) as triage, \
+        with patch('watson.mcp.require_github', return_value={'ok': True}), \
+             patch('watson.mcp.triage', return_value=fake) as triage, \
              patch('watson.mcp.GitHub'), \
              patch('watson.mcp.Codex'):
             response = dispatch(self.home, {
@@ -101,18 +225,27 @@ class MCPTests(unittest.TestCase):
         self.assertEqual(payload['run_id'], 1)
 
     def test_investigate_rejects_foreign_repo_url_in_portuguese(self):
-        response = dispatch(self.home, {
-            'method': 'tools/call',
-            'params': {
-                'name': 'watson_investigate',
-                'arguments': {'issue': 'https://github.com/other/place/issues/1'},
-            },
-        })
+        with patch('watson.mcp.require_github', return_value={'ok': True}):
+            response = dispatch(self.home, {
+                'method': 'tools/call',
+                'params': {
+                    'name': 'watson_investigate',
+                    'arguments': {'issue': 'https://github.com/other/place/issues/1'},
+                },
+            })
         self.assertTrue(response['isError'])
         text = response['content'][0]['text']
         self.assertIn('demo/repo', text)
         self.assertNotIn('Docker', text)
         self.assertNotIn('PAT', text)
+
+    def test_require_github_raises_curated_error(self):
+        with patch('watson.capabilities.check_github', return_value={
+            'ok': False, 'reason': 'not_authenticated', 'connected': False, 'login': None,
+        }):
+            with self.assertRaises(WatsonError) as ctx:
+                require_github(language='pt')
+        self.assertIn('O GitHub ainda não está conectado', str(ctx.exception))
 
 
 if __name__ == '__main__':
