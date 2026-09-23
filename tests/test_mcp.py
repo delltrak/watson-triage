@@ -84,16 +84,19 @@ class CapabilityTests(unittest.TestCase):
         self.assertNotIn('compose', both.lower())
         en = github_missing_message(github, 'en')
         pt = github_missing_message(github, 'pt')
-        self.assertIn('github-credentials', en)
-        self.assertIn('github-credentials', pt)
+        self.assertNotIn('github-credentials', en)
+        self.assertNotIn('github-credentials', pt)
+        self.assertNotIn('Personal access', en)
+        self.assertNotIn('Personal access', pt)
+        self.assertNotIn('GH_TOKEN', en)
+        self.assertNotIn('GH_TOKEN', pt)
         self.assertNotIn('O GitHub ainda', en)
         self.assertNotIn('GitHub is not connected', pt)
-        # iMessage-friendly: blank line between numbered setup steps
-        self.assertIn('1)', en)
-        self.assertIn('\n\n2)', en)
-        self.assertIn('\n\n3)', en)
-        self.assertIn('\n\n2)', pt)
-        self.assertIn('\n\n3)', pt)
+        # Neutral pointer (no tutorial), fine for the owner and anyone else.
+        self.assertIn('outside this chat', en)
+        self.assertIn('fora do chat', pt)
+        self.assertNotIn('line owner', en.lower())
+        self.assertNotIn('dono da linha', pt.lower())
 
     def test_check_github_reports_missing_cli(self):
         with patch('watson.capabilities.shutil.which', return_value=None):
@@ -115,10 +118,23 @@ class CapabilityTests(unittest.TestCase):
         self.assertTrue(result['ok'])
         self.assertEqual(result['login'], 'delltrak')
 
+    def test_check_github_needs_logged_in_marker(self):
+        """rc 0 alone (e.g. a child reaped by another waitpid) is not connected."""
+        class Empty:
+            returncode = 0
+            stdout = ''
+            stderr = ''
+
+        with patch.dict('os.environ', {'GH_TOKEN': '', 'GITHUB_TOKEN': ''}), \
+             patch('watson.capabilities.shutil.which', return_value='/usr/bin/gh'):
+            result = check_github(run=lambda cmd, **kwargs: Empty())
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['reason'], 'not_authenticated')
+
     def test_capabilities_report_never_all_ok_when_gh_missing(self):
         fake_gh = {'ok': False, 'reason': 'not_authenticated', 'connected': False, 'login': None}
-        fake_codex = {'ok': True, 'reason': 'cli_present', 'connected': True}
-        fake_claude = {'ok': True, 'reason': 'cli_present', 'connected': True}
+        fake_codex = {'ok': False, 'reason': 'not_authenticated', 'connected': False}
+        fake_claude = {'ok': False, 'reason': 'not_authenticated', 'connected': False}
         with patch('watson.capabilities.check_github', return_value=fake_gh), \
              patch('watson.capabilities.check_codex', return_value=fake_codex), \
              patch('watson.capabilities.check_claude', return_value=fake_claude):
@@ -133,7 +149,8 @@ class CapabilityTests(unittest.TestCase):
         self.assertIn('\n\n2. **Codex CLI**', report['summary'])
         self.assertIn('\n\n3. **Claude Code CLI**', report['summary'])
         self.assertIn('setup', report)
-        self.assertIn('\n\n2)', report['setup'])
+        self.assertNotIn('github-credentials', report['setup'])
+        self.assertNotIn('GH_TOKEN', report['setup'])
         self.assertIn('onboarding', report)
         self.assertIn('engineering teammate', report['onboarding'])
         self.assertIn('**GitHub**', report['onboarding'])
@@ -165,12 +182,61 @@ class CapabilityTests(unittest.TestCase):
         self.assertIn('\n\n1. **GitHub**', text)
         self.assertIn('\n\n2. **Codex CLI**', text)
         self.assertIn('\n\n3. **Claude Code CLI**', text)
-        self.assertIn('github-credentials', text)
+        self.assertNotIn('github-credentials', text)
+        self.assertNotIn('GH_TOKEN', text)
+        self.assertNotIn('Personal access', text)
         self.assertIn('draft PR', text)
         self.assertIn('/help', text)
         self.assertIn('Nunca faço merge', text)
         self.assertIn('pede pra conectar aqui no chat', text)
         self.assertNotIn('conectar uma vez nesta linha', text)
+
+    def test_cli_present_never_counts_as_connected(self):
+        from watson.capabilities import check_codex, check_claude
+
+        class Usage:
+            returncode = 2
+            stdout = 'usage: codex'
+            stderr = ''
+
+        def fake_run(cmd, **kwargs):
+            return Usage()
+
+        with patch('watson.capabilities.shutil.which', return_value='/usr/bin/codex'):
+            codex = check_codex(run=fake_run)
+        self.assertFalse(codex['ok'])
+        self.assertFalse(codex['connected'])
+        self.assertEqual(codex['reason'], 'not_authenticated')
+
+        class ClaudeUsage:
+            returncode = 2
+            stdout = 'Usage: claude'
+            stderr = ''
+
+        def fake_claude(cmd, **kwargs):
+            return ClaudeUsage()
+
+        with patch('watson.capabilities.shutil.which', return_value='/usr/bin/claude'):
+            claude = check_claude(run=fake_claude)
+        self.assertFalse(claude['ok'])
+        self.assertFalse(claude['connected'])
+
+    def test_speak_this_never_mentions_credentials_files(self):
+        fake_gh = {
+            'ok': False, 'reason': 'not_authenticated', 'connected': False, 'login': None,
+        }
+        fake_codex = {'ok': False, 'reason': 'not_authenticated', 'connected': False}
+        fake_claude = {'ok': False, 'reason': 'not_authenticated', 'connected': False}
+        with patch('watson.capabilities.check_github', return_value=fake_gh), \
+             patch('watson.capabilities.check_codex', return_value=fake_codex), \
+             patch('watson.capabilities.check_claude', return_value=fake_claude):
+            report = capabilities_report(language='pt')
+        blob = '\n'.join([
+            report['speak_this'], report.get('setup') or '', report['summary'],
+            report['onboarding'],
+        ])
+        for banned in ('github-credentials', 'GH_TOKEN', 'Personal access', 'PAT'):
+            self.assertNotIn(banned, blob)
 
     def test_speak_this_gates_always_populated(self):
         fake_gh = {
@@ -217,8 +283,92 @@ class CapabilityTests(unittest.TestCase):
         self.assertIn('not connected yet', en['speak_this'].lower())
         self.assertIn('**GitHub**', en['speak_this'])
         # Must not invent Codex/Claude as missing when they are ok.
-        self.assertIn('available.', en['speak_this'])
+        self.assertIn('2. **Codex CLI** — connected.', en['speak_this'])
+        self.assertIn('3. **Claude Code CLI** — connected.', en['speak_this'])
+        self.assertNotIn('available', en['speak_this'])
         self.assertNotIn('not logged in', en['speak_this'])
+
+    def test_target_state_pt_greeting_copy(self):
+        """GitHub via GH_TOKEN as delltrak, Codex/Claude not logged in (piloto Alder)."""
+        fake_gh = {'ok': True, 'reason': 'token_env', 'connected': True, 'login': 'delltrak'}
+        fake_codex = {'ok': False, 'reason': 'not_authenticated', 'connected': False}
+        fake_claude = {'ok': False, 'reason': 'not_authenticated', 'connected': False}
+        with patch('watson.capabilities.check_github', return_value=fake_gh), \
+             patch('watson.capabilities.check_codex', return_value=fake_codex), \
+             patch('watson.capabilities.check_claude', return_value=fake_claude):
+            text = capabilities_report(language='pt')['speak_this']
+        self.assertIn('1. **GitHub** — conectado como delltrak.', text)
+        self.assertIn('2. **Codex CLI** — instalado mas sem login — pede pra conectar aqui no chat', text)
+        self.assertIn('3. **Claude Code CLI** — instalado mas sem login — pede pra conectar aqui no chat', text)
+        for banned in ('disponível', 'não conectado', 'github-credentials', 'GH_TOKEN',
+                       'Personal access', 'token'):
+            self.assertNotIn(banned, text)
+
+    def test_authenticated_cli_reads_conectado_never_disponivel(self):
+        fake_gh = {'ok': True, 'reason': 'token_env', 'connected': True, 'login': 'delltrak'}
+        fake_ok = {'ok': True, 'reason': 'authenticated', 'connected': True}
+        with patch('watson.capabilities.check_github', return_value=fake_gh), \
+             patch('watson.capabilities.check_codex', return_value=fake_ok), \
+             patch('watson.capabilities.check_claude', return_value=fake_ok):
+            report = capabilities_report(language='pt')
+        self.assertIn('2. **Codex CLI** — conectado.', report['speak_this'])
+        self.assertIn('3. **Claude Code CLI** — conectado.', report['speak_this'])
+        self.assertNotIn('disponível', json.dumps(report, ensure_ascii=False))
+
+    def test_check_codex_needs_positive_login_marker(self):
+        from watson.capabilities import check_codex
+
+        def probe(returncode, stdout='', stderr=''):
+            class Result:
+                pass
+            result = Result()
+            result.returncode, result.stdout, result.stderr = returncode, stdout, stderr
+            return lambda cmd, **kwargs: result
+
+        cases = [
+            (probe(0, stderr='Logged in using ChatGPT\n'), True),
+            (probe(0, stdout='Logged in using an API key - sk-***\n'), True),
+            (probe(0), False),
+            (probe(0, stdout='Not logged in\n'), False),
+            (probe(1, stderr='Not logged in\n'), False),
+            (probe(124, stderr='timeout'), False),
+        ]
+        for run, expected in cases:
+            with patch('watson.capabilities.shutil.which', return_value='/usr/bin/codex'):
+                result = check_codex(run=run)
+            self.assertEqual(result['ok'], expected, run(None).__dict__)
+            self.assertEqual(result['connected'], expected)
+            self.assertEqual(result['reason'], 'authenticated' if expected else 'not_authenticated')
+
+    def test_unresolved_token_template_counts_as_not_connected(self):
+        """Hermes keeps a literal ${GH_TOKEN} when the var is unset — not a token."""
+        calls = []
+
+        class Fail:
+            returncode = 1
+            stdout = ''
+            stderr = 'You are not logged into any GitHub hosts.'
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            return Fail()
+
+        for value in ('${GH_TOKEN}', '${env:GH_TOKEN}', '', '   '):
+            calls.clear()
+            with patch.dict('os.environ', {'GH_TOKEN': value}, clear=False), \
+                 patch('watson.capabilities.shutil.which', return_value='/usr/bin/gh'):
+                result = check_github(run=fake_run)
+            self.assertEqual(result['reason'], 'not_authenticated', value)
+            self.assertEqual(calls, [['gh', 'auth', 'status']], value)
+
+    def test_drop_unresolved_secrets(self):
+        from watson.capabilities import drop_unresolved_secrets
+        env = {
+            'GH_TOKEN': '${GH_TOKEN}', 'GITHUB_TOKEN': '', 'PLOW_AGENT_TOKEN': 'real',
+            'HOME': '/var/lib/hermes',
+        }
+        drop_unresolved_secrets(env)
+        self.assertEqual(env, {'PLOW_AGENT_TOKEN': 'real', 'HOME': '/var/lib/hermes'})
 
 
 class MCPTests(unittest.TestCase):
@@ -390,6 +540,7 @@ class MCPTests(unittest.TestCase):
     def test_investigate_accepts_url_via_issue_argument(self):
         fake = {'run_id': 1, 'cached': True, 'result': {'summary': 'ok'}}
         with patch('watson.mcp.require_github', return_value={'ok': True}), \
+             patch('watson.mcp.require_codex', return_value={'ok': True}), \
              patch('watson.mcp.triage', return_value=fake) as triage, \
              patch('watson.mcp.GitHub'), \
              patch('watson.mcp.Codex'):
@@ -410,6 +561,7 @@ class MCPTests(unittest.TestCase):
     def test_investigate_uses_foreign_repo_from_issue_url(self):
         fake = {'run_id': 2, 'cached': True, 'result': {'summary': 'ok', 'repository': 'other/place'}}
         with patch('watson.mcp.require_github', return_value={'ok': True}), \
+             patch('watson.mcp.require_codex', return_value={'ok': True}), \
              patch('watson.mcp.triage', return_value=fake) as triage, \
              patch('watson.mcp.GitHub') as gh, \
              patch('watson.mcp.Codex'):
@@ -448,6 +600,7 @@ class MCPTests(unittest.TestCase):
     def test_arguments_json_string_coerced(self):
         fake = {'run_id': 3, 'cached': True, 'result': {'summary': 'ok'}}
         with patch('watson.mcp.require_github', return_value={'ok': True}), \
+             patch('watson.mcp.require_codex', return_value={'ok': True}), \
              patch('watson.mcp.triage', return_value=fake) as triage, \
              patch('watson.mcp.GitHub'), \
              patch('watson.mcp.Codex'):

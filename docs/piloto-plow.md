@@ -14,8 +14,10 @@ iMessage Plow que o João já tem; reutilizamos a credencial dessa linha.
 | `Dockerfile` | `FROM` a imagem base plow-hermes-agent (pin `base-<sha>` + digest), instala o pacote `watson`, persona e MCP |
 | `compose.yml` | Serviço `agent` no formato do `compose.example.yml` do plow-agents |
 | `runtime/persona.md` | Persona PT-BR (sempre draft PR, nunca merge; sem falar de branch/PAT/Docker) |
-| `runtime/mcp-watson.yaml` | Bloco `mcp_servers.watson` → `watson mcp` (stdio, só leitura) |
+| `runtime/mcp-watson.yaml` | Bloco `mcp_servers.watson` → `watson mcp` (stdio, só leitura), com `env` (`GH_TOKEN`, `PLOW_AGENT_TOKEN`, `HOME`) + skill `github` desligada no plow_chat |
+| `image/watson-config-merge.py` | Merge idempotente do overlay acima no `config.yaml` (seed da imagem e boot) |
 | `image/cont-init.d/20-watson-mcp` | Garante home Watson + merge do MCP em boots com volume existente |
+| `image/hooks/watson-greet/` + `image/cont-init.d/25-watson-greeting-bypass` | Hook de gateway: greeting do dono → `speak_this` exato, sem LLM |
 
 `watson_investigate` aceita **número ou URL** de issue (parser no núcleo +
 ponte MCP). Ainda **não** expõe repair/draft-PR via MCP. A ponte continua só
@@ -32,7 +34,8 @@ GitHub no container: a imagem instala o CLI `gh`. A autenticação entra pelo
 arquivo local **`github-credentials`** (gitignored) com `GH_TOKEN=...`, carregado
 pelo `compose.yml` (opcional até existir). Sem esse token, `watson_status` e
 `watson_investigate` **dizem claramente** que o GitHub não está conectado e
-passam instruções bilíngues (en/pt) — nunca fingem que está tudo ok.
+pedem para o dono da linha conectar — sem tutorial de token/arquivo no chat e
+sem fingir que está tudo ok. O passo a passo fica só nesta doc.
 
 Codex local continua necessário para a inferência completa da investigação;
 falta de Codex também aparece no status.
@@ -129,6 +132,33 @@ Depois disso, `watson_status` deve reportar GitHub conectado e
 `watson_investigate` pode consultar issues. Sem o arquivo, o status fica
 honesto e pede para conectar.
 
+## Como o status chega ao chat
+
+- O Hermes sobe servidores MCP stdio com env **filtrado** (só `PATH`/`HOME` e
+  afins). Por isso `runtime/mcp-watson.yaml` repassa `GH_TOKEN` e
+  `PLOW_AGENT_TOKEN` via `env:` (`${VAR}` resolvido do env do gateway; o
+  `config.yaml` guarda só o template). Sem isso o `watson_status` via MCP via o
+  GitHub como desconectado mesmo com o token montado.
+- Greeting puro do dono na DM Plow (texto só com `oi`, `olá`, `hey`, `bom dia`,
+  …) é respondido pelo hook `watson-greet` com o `speak_this` exato do
+  `watson_status`, **sem chamar o LLM**; o wake de restart do Plow fica em
+  silêncio (`NO_REPLY`) do mesmo jeito. O turno vai para o transcript
+  normalmente. Qualquer outra mensagem (pedido, pergunta de status, foto,
+  resposta citando outra mensagem, grupo, não-dono) segue pelo LLM + tools.
+- Codex/Claude: login via chat (`watson_connect_codex` / `watson_connect_claude`);
+  credenciais ficam em `/var/lib/hermes/.codex` e `/var/lib/hermes/.claude*`.
+
+Para conferir o status **do jeito que o chat vê**, nunca use `docker exec` como
+root (HOME=/root, com `GH_TOKEN` herdado — mostra outro estado). Use o uid do
+Hermes com o HOME do runtime:
+
+```sh
+docker exec -u 10000 -e HOME=/var/lib/hermes watson-triage-agent-1 \
+  sh -c 'tr "\0" "\n" </proc/$(pgrep -o -f "[w]atson --home")/environ | cut -d= -f1'
+docker exec -u 10000 -e HOME=/var/lib/hermes watson-triage-agent-1 codex login status
+docker logs watson-triage-agent-1 2>&1 | grep -E "\[hooks\]|\[watson-greet\]"
+```
+
 ## O que NÃO fazer
 
 - Não usar `plow-openclaw-agent` nem qualquer stack OpenClaw neste piloto.
@@ -144,7 +174,7 @@ honesto e pede para conectar.
 | Credencial da linha Plow | `plow-credentials` ou `PLOW_CREDENTIALS` | Escopo da linha; mint/rotate via plow-agents |
 | Home Hermes + Watson | volume Docker `agent-home` → `/var/lib/hermes` | Estado em `/var/lib/hermes/watson` |
 | GitHub (`GH_TOKEN`) | `./github-credentials` (gitignore) | Ver seção abaixo; nunca commitar |
-| Codex | ambiente do container / login local | Necessário para inferência da investigação |
+| Codex / Claude Code | login via chat → `/var/lib/hermes/.codex`, `/var/lib/hermes/.claude*` | Codex é necessário para inferência da investigação |
 
 ## Referências
 

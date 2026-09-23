@@ -10,10 +10,13 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 
-from .capabilities import check_claude, check_codex, message_for, normalize_language
+from .capabilities import (
+    SECRET_ENV_KEYS, check_claude, check_codex, message_for, normalize_language,
+)
 from .core import WatsonError
 
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
@@ -228,6 +231,14 @@ def _parse_claude(log_text: str) -> str | None:
     return m.group(0).rstrip('.,;:)') if m else None
 
 
+def _login_env() -> dict:
+    """CLI login env without Watson's GitHub/Plow secrets (the login needs neither)."""
+    env = os.environ.copy()
+    for key in SECRET_ENV_KEYS:
+        env.pop(key, None)
+    return env
+
+
 def _start_process(home: Path, provider: str, cmd: list[str]) -> subprocess.Popen:
     log = _log_path(home, provider)
     try:
@@ -243,7 +254,7 @@ def _start_process(home: Path, provider: str, cmd: list[str]) -> subprocess.Pope
             stdout=log_fh,
             stderr=subprocess.STDOUT,
             start_new_session=True,
-            env=os.environ.copy(),
+            env=_login_env(),
         )
     # Keep stdin fd alive via /proc when possible; store pid only.
     # For Claude we reopen stdin through /proc/<pid>/fd/0 later.
@@ -528,7 +539,7 @@ def _spawn_auth_waiter(home: Path, provider: str, language) -> int | None:
     lang = language if language not in (None, '') else 'pt'
     # Prefer installed package entry; fall back to -m for editable installs.
     cmd = [
-        'python3', '-c',
+        sys.executable or 'python3', '-c',
         'from watson.oauth_connect import wait_and_notify\n'
         'import sys\n'
         'wait_and_notify(sys.argv[1], sys.argv[2], language=sys.argv[3], '

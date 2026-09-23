@@ -6,6 +6,7 @@ __pycache__
 *.egg-info
 .env
 plow-credentials
+github-credentials*
 auth.json
 tests
 docs

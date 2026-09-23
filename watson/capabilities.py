@@ -6,40 +6,27 @@ Never claim GitHub is connected when auth is missing.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 
 from .core import WatsonError
 
 
-# Junior-friendly owner steps. No Docker / PAT / branch jargon.
+# Chat-facing copy only. Never mention PAT / github-credentials / token files
+# in user-facing messages — line-owner setup stays off-chat.
 _GITHUB_MISSING = {
     'en': (
         'GitHub is not connected yet, so I cannot investigate issues.\n'
         '\n'
-        'Please connect GitHub once on the computer that runs Watson:\n'
-        '\n'
-        '1) Create a GitHub token with read access to your repositories '
-        '(GitHub → Settings → Developer settings → Personal access tokens).\n'
-        '\n'
-        '2) In the watson-triage folder, create a private file named '
-        '`github-credentials` with one line: GH_TOKEN=your_token '
-        '(never share or commit this file).\n'
-        '\n'
-        '3) Restart Watson the same way you usually start this pilot, then ask me again.'
+        'GitHub is connected outside this chat, on the computer that runs '
+        'Watson (see the pilot guide). Then just message me again.'
     ),
     'pt': (
         'O GitHub ainda não está conectado, então não consigo investigar issues.\n'
         '\n'
-        'Conecte o GitHub uma vez no computador onde o Watson roda:\n'
-        '\n'
-        '1) Crie um token do GitHub com leitura dos seus repositórios '
-        '(GitHub → Settings → Developer settings → Personal access tokens).\n'
-        '\n'
-        '2) Na pasta watson-triage, crie o arquivo privado `github-credentials` '
-        'com uma linha: GH_TOKEN=seu_token (nunca compartilhe nem versione este arquivo).\n'
-        '\n'
-        '3) Reinicie o Watson como você costuma iniciar este piloto e peça de novo.'
+        'A conexão do GitHub é feita fora do chat, no computador onde o Watson '
+        'roda (guia do piloto). Depois é só me chamar de novo.'
     ),
 }
 
@@ -146,8 +133,27 @@ def _run(cmd, run, timeout=20, env=None):
         return subprocess.CompletedProcess(cmd, 124, '', 'timeout')
 
 
+# Hermes keeps a literal `${VAR}` in mcp_servers env when VAR is unset.
+_UNRESOLVED = re.compile(r'^\$\{[^}]*\}$')
+SECRET_ENV_KEYS = ('GH_TOKEN', 'GITHUB_TOKEN', 'PLOW_AGENT_TOKEN')
+
+
+def usable_secret(value):
+    """Secret env value, or '' when empty / an unresolved `${VAR}` template."""
+    value = (value or '').strip()
+    return '' if not value or _UNRESOLVED.match(value) else value
+
+
+def drop_unresolved_secrets(environ=None):
+    """Remove empty / `${VAR}` secret values so gh never runs with a garbage token."""
+    environ = os.environ if environ is None else environ
+    for key in SECRET_ENV_KEYS:
+        if key in environ and not usable_secret(environ[key]):
+            del environ[key]
+
+
 def _token_present():
-    return bool(os.environ.get('GH_TOKEN') or os.environ.get('GITHUB_TOKEN'))
+    return any(usable_secret(os.environ.get(key)) for key in ('GH_TOKEN', 'GITHUB_TOKEN'))
 
 
 def check_github(run=subprocess.run):
@@ -160,9 +166,10 @@ def check_github(run=subprocess.run):
             'login': None,
         }
     status = _run(['gh', 'auth', 'status'], run, timeout=15)
-    if status.returncode == 0:
+    combined = (status.stdout or '') + (status.stderr or '')
+    # Positive marker too: rc 0 alone can be a reaped-child artifact.
+    if status.returncode == 0 and 'logged in to' in combined.lower():
         login = None
-        combined = (status.stdout or '') + (status.stderr or '')
         for line in combined.splitlines():
             # "Logged in to github.com account NAME"
             if 'account ' in line.lower():
@@ -204,13 +211,11 @@ def check_codex(run=subprocess.run):
         return {'ok': False, 'reason': 'cli_missing', 'connected': False}
     probe = _run(['codex', 'login', 'status'], run, timeout=15)
     combined = ((probe.stdout or '') + (probe.stderr or '')).lower()
-    if probe.returncode == 0 and 'not logged in' not in combined:
+    # Connected only on a positive marker ("Logged in using ChatGPT").
+    # Usage text, timeouts, or unknown output — never claim connected.
+    if (probe.returncode == 0 and 'logged in' in combined
+            and 'not logged in' not in combined and 'logged in: false' not in combined):
         return {'ok': True, 'reason': 'authenticated', 'connected': True}
-    if 'not logged in' in combined or 'logged in: false' in combined:
-        return {'ok': False, 'reason': 'not_authenticated', 'connected': False}
-    # Older/newer CLIs may not support this subcommand; treat binary as present.
-    if probe.returncode == 2 or 'usage' in combined:
-        return {'ok': True, 'reason': 'cli_present', 'connected': True}
     return {'ok': False, 'reason': 'not_authenticated', 'connected': False}
 
 
@@ -224,9 +229,7 @@ def check_claude(run=subprocess.run):
         return {'ok': True, 'reason': 'authenticated', 'connected': True}
     if '"loggedin":false' in compact or 'not logged' in combined.lower():
         return {'ok': False, 'reason': 'not_authenticated', 'connected': False}
-    if probe.returncode == 2 or 'usage' in combined.lower():
-        return {'ok': True, 'reason': 'cli_present', 'connected': True}
-    # CLI present but auth unclear — do not claim connected.
+    # Unknown / usage / unclear — never claim connected or "disponível".
     return {'ok': False, 'reason': 'not_authenticated', 'connected': False}
 
 
@@ -253,10 +256,10 @@ def require_codex(language=None, run=subprocess.run):
 
 
 def codex_status_message(codex, language=None):
-    if codex.get('ok'):
+    if codex.get('ok') and codex.get('reason') == 'authenticated':
         mapping = {
-            'en': 'Codex available.',
-            'pt': 'Codex disponível.',
+            'en': 'Codex connected.',
+            'pt': 'Codex conectado.',
         }
         return message_for(mapping, language)
     if codex.get('reason') == 'not_authenticated':
@@ -265,10 +268,10 @@ def codex_status_message(codex, language=None):
 
 
 def claude_status_message(claude, language=None):
-    if claude.get('ok'):
+    if claude.get('ok') and claude.get('reason') == 'authenticated':
         mapping = {
-            'en': 'Claude Code available.',
-            'pt': 'Claude Code disponível.',
+            'en': 'Claude Code connected.',
+            'pt': 'Claude Code conectado.',
         }
         return message_for(mapping, language)
     if claude.get('reason') == 'not_authenticated':
@@ -290,8 +293,8 @@ def _onboarding_gh_status(github, language):
 
 
 def _onboarding_codex_status(codex, language):
-    if codex.get('ok'):
-        return {'en': 'available.', 'pt': 'disponível.'}[language]
+    if codex.get('ok') and codex.get('reason') == 'authenticated':
+        return {'en': 'connected.', 'pt': 'conectado.'}[language]
     if codex.get('reason') == 'not_authenticated':
         return {
             'en': 'installed but not logged in — ask me to connect here in chat for a link.',
@@ -304,8 +307,8 @@ def _onboarding_codex_status(codex, language):
 
 
 def _onboarding_claude_status(claude, language):
-    if claude.get('ok'):
-        return {'en': 'available.', 'pt': 'disponível.'}[language]
+    if claude.get('ok') and claude.get('reason') == 'authenticated':
+        return {'en': 'connected.', 'pt': 'conectado.'}[language]
     if claude.get('reason') == 'not_authenticated':
         return {
             'en': 'installed but not logged in — ask me to connect here in chat for a link.',
@@ -318,42 +321,27 @@ def _onboarding_claude_status(claude, language):
 
 
 def _github_setup_steps(github, language):
-    """Token/install steps only (no lead-in "not connected" sentence)."""
+    """Off-chat pointer only. Never a PAT / github-credentials tutorial in chat."""
     if github.get('reason') == 'cli_missing':
         return {
             'en': (
-                'Ask the owner to update/restart Watson with the latest piloto '
-                'setup that includes GitHub access, then try again.'
+                'This Watson install needs the latest piloto setup with GitHub '
+                'access (updated outside this chat). Then try again.'
             ),
             'pt': (
-                'Peça ao dono para atualizar/reiniciar o Watson com a '
-                'configuração mais recente do piloto que inclui acesso ao '
-                'GitHub e tente de novo.'
+                'Esta instalação do Watson precisa da configuração mais recente '
+                'do piloto com acesso ao GitHub (atualizada fora do chat). '
+                'Depois tente de novo.'
             ),
         }[language]
     return {
         'en': (
-            'Connect GitHub once on the computer that runs Watson:\n'
-            '\n'
-            '1) Create a GitHub token with read access to your repositories '
-            '(GitHub → Settings → Developer settings → Personal access tokens).\n'
-            '\n'
-            '2) In the watson-triage folder, create a private file named '
-            '`github-credentials` with one line: GH_TOKEN=your_token '
-            '(never share or commit this file).\n'
-            '\n'
-            '3) Restart Watson the same way you usually start this pilot, then ask me again.'
+            'GitHub is connected outside this chat, on the computer that runs '
+            'Watson (see the pilot guide). Then just message me again.'
         ),
         'pt': (
-            'Conecte o GitHub uma vez no computador onde o Watson roda:\n'
-            '\n'
-            '1) Crie um token do GitHub com leitura dos seus repositórios '
-            '(GitHub → Settings → Developer settings → Personal access tokens).\n'
-            '\n'
-            '2) Na pasta watson-triage, crie o arquivo privado `github-credentials` '
-            'com uma linha: GH_TOKEN=seu_token (nunca compartilhe nem versione este arquivo).\n'
-            '\n'
-            '3) Reinicie o Watson como você costuma iniciar este piloto e peça de novo.'
+            'A conexão do GitHub é feita fora do chat, no computador onde o '
+            'Watson roda (guia do piloto). Depois é só me chamar de novo.'
         ),
     }[language]
 

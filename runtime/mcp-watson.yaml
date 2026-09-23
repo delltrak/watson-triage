@@ -1,10 +1,32 @@
-# Fragmento mesclado em config.yaml (seed + homes existentes).
+# Merge em config.yaml do Hermes (Dockerfile seed + cont-init 20-watson-mcp).
 # Ponte stdio: watson_status, watson_investigate, watson_connect_codex,
 # watson_connect_claude (device/remote login URL no chat).
 # Sem envio Plow, sem escrita GitHub, sem merge via MCP.
+#
+# CRITICAL: Hermes starts stdio MCP servers with a filtered env
+# (tools/mcp_tool_config.py _build_safe_env): only PATH/HOME-style keys plus
+# this `env:` block survive. Without GH_TOKEN here, watson_status reported
+# GitHub as disconnected even with github-credentials mounted.
+# `${VAR}` is resolved from the gateway env when the config loads; an unset
+# var stays as the literal `${VAR}` (watson treats that as absent). The file
+# on disk keeps the template, never the value.
+# PLOW_AGENT_TOKEN: the OAuth waiter pings the owner DM when login completes.
+# HOME pinned: Codex/Claude credentials live under /var/lib/hermes.
+# No PATH override: the inherited PATH keeps /opt/hermes/.venv/bin.
 mcp_servers:
   watson:
     command: /opt/hermes/.venv/bin/watson
     args: ["--home", "/var/lib/hermes/watson", "mcp"]
+    env:
+      GH_TOKEN: ${GH_TOKEN}
+      PLOW_AGENT_TOKEN: ${PLOW_AGENT_TOKEN}
+      HOME: /var/lib/hermes
     timeout: 900
     connect_timeout: 30
+
+# Plow chat: the bundled `github` skill checks auth with terminal `gh`, whose
+# env also lacks GH_TOKEN, and carries a PAT setup tutorial. Connection status
+# comes only from watson_status. Merged as a union into existing config.
+skills:
+  platform_disabled:
+    plow_chat: [github]

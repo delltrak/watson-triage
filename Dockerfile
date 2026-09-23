@@ -18,26 +18,16 @@ RUN set -eu; \
     /opt/hermes/.venv/bin/watson --help >/dev/null; \
     test -x /opt/hermes/.venv/bin/watson
 
-# Injeta mcp_servers.watson no seed da imagem (homes novos herdam via cont-init 00).
-# Homes já existentes recebem o mesmo bloco em image/cont-init.d/20-watson-mcp.
+# Injeta mcp_servers.watson (+ skills.platform_disabled) no seed da imagem
+# (homes novos herdam via cont-init 00). Homes já existentes recebem o mesmo
+# merge em image/cont-init.d/20-watson-mcp.
 COPY --chmod=0644 runtime/mcp-watson.yaml /opt/watson-triage/mcp-watson.yaml
+COPY --chmod=0644 image/watson-config-merge.py /opt/watson-triage/watson-config-merge.py
 RUN set -eu; \
-    /opt/hermes/.venv/bin/python - <<'PY'
-from pathlib import Path
-import yaml
-
-overlay = yaml.safe_load(Path("/opt/watson-triage/mcp-watson.yaml").read_text())
-watson = overlay["mcp_servers"]["watson"]
-for path in (
-    Path("/opt/hermes/plow-seed/config.yaml"),
-    Path("/var/lib/hermes/config.yaml"),
-):
-    data = yaml.safe_load(path.read_text()) or {}
-    servers = data.setdefault("mcp_servers", {})
-    servers["watson"] = watson
-    path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
-    print(f"seeded watson mcp into {path}")
-PY
+    for config in /opt/hermes/plow-seed/config.yaml /var/lib/hermes/config.yaml; do \
+      /opt/hermes/.venv/bin/python /opt/watson-triage/watson-config-merge.py \
+        "$config" /opt/watson-triage/mcp-watson.yaml; \
+    done
 
 # GitHub CLI: watson_investigate uses `gh api`. Auth via GH_TOKEN (see compose).
 # Official apt repo from cli.github.com.
@@ -66,3 +56,8 @@ RUN set -eu; \
 
 # Estado Watson sob o home Hermes (volume agent-home). Criado de novo no boot.
 COPY --chmod=0755 image/cont-init.d/20-watson-mcp /etc/cont-init.d/20-watson-mcp
+# Hook de gateway: greeting do dono → speak_this exato, sem LLM.
+# Sem --chmod no diretório (0644 tornaria o dir intransitável para uid 10000).
+COPY --chmod=0755 image/cont-init.d/25-watson-greeting-bypass /etc/cont-init.d/25-watson-greeting-bypass
+COPY image/hooks/watson-greet /opt/watson-triage/hooks/watson-greet
+RUN chmod -R u=rwX,go=rX /opt/watson-triage/hooks

@@ -7,7 +7,9 @@ import traceback
 from pathlib import Path
 
 from .analysis import Codex, triage
-from .capabilities import capabilities_report, normalize_language, require_codex, require_github
+from .capabilities import (
+    capabilities_report, drop_unresolved_secrets, normalize_language, require_codex, require_github,
+)
 from .core import Store, WatsonError, load_config
 from .issue_ref import resolve_issue_ref
 from .github import GitHub
@@ -42,7 +44,8 @@ TOOLS = [
                     '(e.g. https://github.com/owner/project/issues/12) — that URL\'s repository '
                     'is investigated, not only the default. '
                     'Repo homepage URLs without /issues/N are rejected with a clear ask for the issue link. '
-                    'If GitHub is not connected, returns clear setup instructions instead of pretending. '
+                    'If GitHub is not connected, returns a short not-connected note (never a token/setup '
+                    'tutorial) instead of pretending. '
                     'May use the Codex subscription. Does not send messages or write to GitHub.',
      'inputSchema': {
          'type': 'object',
@@ -271,6 +274,8 @@ def dispatch(home, message):
 
 
 def serve(home, incoming=sys.stdin, outgoing=sys.stdout):
+    # Unset mcp_servers env vars arrive as a literal `${VAR}`; treat them as absent.
+    drop_unresolved_secrets()
     for line in incoming:
         message = None
         try:

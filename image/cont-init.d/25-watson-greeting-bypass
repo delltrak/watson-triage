@@ -1,0 +1,33 @@
+#!/command/with-contenv sh
+# Instala o hook watson-greet em $HERMES_HOME/hooks (o gateway carrega hooks de lá
+# no boot). Nunca fatal: sem hook, greetings seguem pelo LLM + watson_status.
+#
+# Roda como root, mas o home é gravável pelo agente (uid 10000): toda escrita é
+# feita COMO hermes (s6-setuidgid), então um symlink plantado em hooks/ só
+# alcança o que o próprio hermes já alcança — nunca chown/chmod como root.
+set -eu
+
+HOME_DIR=${HERMES_HOME:-/var/lib/hermes}
+SRC=/opt/watson-triage/hooks/watson-greet
+
+if [ ! -f "$SRC/HOOK.yaml" ] || [ ! -f "$SRC/handler.py" ]; then
+  echo "watson-greet: skip (source missing)" >&2
+  exit 0
+fi
+if [ -L "$HOME_DIR/hooks" ] || [ -L "$HOME_DIR/hooks/watson-greet" ]; then
+  echo "watson-greet: skip (hooks path is a symlink)" >&2
+  exit 0
+fi
+
+if ! /command/s6-setuidgid hermes sh -c '
+  umask 022
+  mkdir -p "$1/hooks" &&
+  rm -rf "$1/hooks/watson-greet" &&
+  mkdir "$1/hooks/watson-greet" &&
+  cp "$2/HOOK.yaml" "$2/handler.py" "$1/hooks/watson-greet/"
+' _ "$HOME_DIR" "$SRC"; then
+  echo "watson-greet: install failed; greetings fall back to the LLM path" >&2
+  exit 0
+fi
+echo "watson-greet: installed hook at $HOME_DIR/hooks/watson-greet" >&2
+exit 0

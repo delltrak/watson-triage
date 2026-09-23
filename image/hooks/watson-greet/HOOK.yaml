@@ -1,0 +1,7 @@
+name: watson-greet
+description: >
+  Owner Plow DM greetings / status openers are answered with the exact
+  watson_status speak_this (no LLM call), so connection status cannot be
+  paraphrased or invented. Falls back to the LLM on any error.
+events:
+  - gateway:startup
