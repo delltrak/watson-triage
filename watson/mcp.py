@@ -6,7 +6,8 @@ import sys
 from pathlib import Path
 
 from .analysis import Codex, triage
-from .core import Store, WatsonError, load_config, resolve_issue_number
+from .core import Store, WatsonError, load_config
+from .issue_ref import resolve_issue_number
 from .github import GitHub
 
 
