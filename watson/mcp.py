@@ -15,9 +15,13 @@ from .github import GitHub
 
 TOOLS = [
     {'name': 'watson_status',
-     'description': 'Check whether GitHub (and Codex) are connected, plus tracked issues '
-                    'and triage history. Always call this before claiming investigation works. '
-                    'Optional language: en, pt, or auto (returns bilingual setup text when omitted).',
+     'description': 'Check whether GitHub, Codex, and Claude are connected, plus tracked '
+                    'issues and triage history. ALWAYS call this on the first user greeting '
+                    '(oi/olá/hey/hi) BEFORE answering, and pass language=pt when the user '
+                    'wrote Portuguese (including short openers like "oi"). Returns '
+                    '`onboarding` — ready-to-send first-greeting copy to relay (do not invent '
+                    'a "Plow assistant" pitch or an owner name). '
+                    'Optional language: en, pt, or auto.',
      'inputSchema': {
          'type': 'object',
          'properties': {
@@ -101,6 +105,9 @@ def _status_result(store, language):
     result['github_connected'] = caps['github']['connected']
     result['ready_to_investigate'] = caps['ready_to_investigate']
     result['status_summary'] = caps['summary']
+    # Ready-to-send first greeting — relay this, do not invent a Plow pitch.
+    if 'onboarding' in caps:
+        result['onboarding'] = caps['onboarding']
     if 'setup' in caps:
         result['setup'] = caps['setup']
     return result

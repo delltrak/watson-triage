@@ -105,14 +105,21 @@ def detect_language(text):
     """Lightweight hint from free text (user message). Defaults to English."""
     if not text or not str(text).strip():
         return 'en'
-    lower = str(text).lower()
+    lower = str(text).lower().strip()
+    # Short PT openers that otherwise look language-neutral ("oi", "olá").
+    pt_greetings = {
+        'oi', 'olá', 'ola', 'oie', 'eai', 'e aí', 'e ai', 'bom dia',
+        'boa tarde', 'boa noite', 'fala', 'opa', 'eae', 'salve',
+    }
+    if lower in pt_greetings or lower.rstrip('!?.') in pt_greetings:
+        return 'pt'
     pt_markers = (
         'ção', 'ções', 'ã', 'õ', 'você', 'voce', 'não', 'nao', 'obrigado',
         'preciso', 'investigar', 'conecte', 'por favor', 'está', 'esta',
-        'também', 'tambem', 'issue', 'me diga', 'consegue',
+        'também', 'tambem', 'me diga', 'consegue', 'tudo bem', 'td bem',
     )
     # Prefer Portuguese when clear PT orthography / common words appear.
-    if any(m in lower for m in ('ção', 'ções', 'ã', 'õ', 'você', 'não ', 'nao ')):
+    if any(m in lower for m in ('ção', 'ções', 'ã', 'õ', 'você', 'não ', 'nao ', 'olá')):
         return 'pt'
     if sum(1 for m in pt_markers if m in lower) >= 2:
         return 'pt'
@@ -269,6 +276,69 @@ def claude_status_message(claude, language=None):
     return message_for(_CLAUDE_MISSING, language)
 
 
+
+def _onboarding_copy(github, codex, claude, checklist_en, checklist_pt, setup_messages):
+    """Ready-to-send first-greeting text. Model should relay, not invent."""
+    gh_ok = bool(github.get('ok'))
+    after_ready_en = (
+        'Once GitHub is connected I can investigate an issue by number or link, '
+        'and open a **draft PR** for a fix (I never merge). '
+        'Text `/help` for commands anytime.'
+    )
+    after_ready_pt = (
+        'Quando o GitHub estiver conectado, posso investigar uma issue por número '
+        'ou link e abrir um **draft PR** com a correção (nunca faço merge). '
+        'Manda `/help` se quiser a lista de comandos.'
+    )
+    if gh_ok:
+        en = (
+            "Hey — I'm Watson, your engineering teammate for GitHub issue triage.\n"
+            '\n'
+            f'{checklist_en}\n'
+            '\n'
+            'Paste an issue number or link and I will investigate. '
+            'Fixes always go out as a **draft PR** (I never merge). '
+            'Text `/help` for commands.'
+        )
+        pt = (
+            'Oi — sou o Watson, seu colega de engenharia pra triagem de issues '
+            'do GitHub.\n'
+            '\n'
+            f'{checklist_pt}\n'
+            '\n'
+            'Manda o número ou o link da issue que eu investigo. '
+            'Correção = sempre **draft PR** (nunca faço merge). '
+            'Se quiser os comandos, manda `/help`.'
+        )
+    else:
+        setup_en = (setup_messages or {}).get('en', '')
+        setup_pt = (setup_messages or {}).get('pt', '')
+        en = (
+            "Hey — I'm Watson, your engineering teammate for GitHub issue triage.\n"
+            '\n'
+            'Not ready to investigate yet. Current gaps:\n'
+            '\n'
+            f'{checklist_en}\n'
+            '\n'
+            f'{setup_en}\n'
+            '\n'
+            f'{after_ready_en}'
+        )
+        pt = (
+            'Oi — sou o Watson, seu colega de engenharia pra triagem de issues '
+            'do GitHub.\n'
+            '\n'
+            'Ainda não dá pra investigar. O que falta:\n'
+            '\n'
+            f'{checklist_pt}\n'
+            '\n'
+            f'{setup_pt}\n'
+            '\n'
+            f'{after_ready_pt}'
+        )
+    return {'en': en, 'pt': pt}
+
+
 def capabilities_report(language=None, run=subprocess.run):
     github = check_github(run=run)
     codex = check_codex(run=run)
@@ -338,6 +408,9 @@ def capabilities_report(language=None, run=subprocess.run):
             'pt': github_missing_message(github, 'pt'),
         }
 
+    onboarding = _onboarding_copy(
+        github, codex, claude, checklist_en, checklist_pt, setup_messages)
+
     report = {
         'github': {
             'connected': github['ok'],
@@ -355,6 +428,11 @@ def capabilities_report(language=None, run=subprocess.run):
         'ready_to_investigate': bool(github['ok']),
         'summary': message_for(summary, lang),
         'messages': summary if lang is None else {lang: summary[lang]},
+        # First-greeting copy the chat agent should relay (not invent).
+        'onboarding': message_for(onboarding, lang),
+        'onboarding_messages': (
+            onboarding if lang is None else {lang: onboarding[lang]}
+        ),
     }
     if setup_messages:
         report['setup'] = (

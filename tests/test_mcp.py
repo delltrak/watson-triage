@@ -8,6 +8,7 @@ from unittest.mock import patch
 from watson.capabilities import (
     capabilities_report,
     check_github,
+    detect_language,
     github_missing_message,
     require_github,
 )
@@ -125,6 +126,36 @@ class CapabilityTests(unittest.TestCase):
         self.assertIn('\n\n3. Claude Code CLI', report['summary'])
         self.assertIn('setup', report)
         self.assertIn('\n\n2)', report['setup'])
+        self.assertIn('onboarding', report)
+        self.assertIn('engineering teammate', report['onboarding'])
+        self.assertNotIn('Plow assistant', report['onboarding'])
+        self.assertIn('/help', report['onboarding'])
+
+    def test_detect_language_short_pt_greetings(self):
+        for text in ('Oi', 'oi!', 'olá', 'Olá', 'bom dia'):
+            self.assertEqual(detect_language(text), 'pt', text)
+        for text in ('hey', 'hi', 'hello'):
+            self.assertEqual(detect_language(text), 'en', text)
+
+    def test_onboarding_pt_cold_start_shape(self):
+        fake_gh = {'ok': False, 'reason': 'not_authenticated', 'connected': False, 'login': None}
+        fake_codex = {'ok': False, 'reason': 'not_authenticated', 'connected': False}
+        fake_claude = {'ok': False, 'reason': 'cli_missing', 'connected': False}
+        with patch('watson.capabilities.check_github', return_value=fake_gh), \
+             patch('watson.capabilities.check_codex', return_value=fake_codex), \
+             patch('watson.capabilities.check_claude', return_value=fake_claude):
+            report = capabilities_report(language='pt')
+        text = report['onboarding']
+        self.assertIn('colega de engenharia', text)
+        self.assertNotIn('Plow assistant', text)
+        self.assertNotIn('Deltrak', text)
+        self.assertIn('Ainda não dá pra investigar', text)
+        self.assertIn('\n\n1. GitHub', text)
+        self.assertIn('\n\n2. Codex CLI', text)
+        self.assertIn('\n\n3. Claude Code CLI', text)
+        self.assertIn('github-credentials', text)
+        self.assertIn('draft PR', text)
+        self.assertIn('/help', text)
 
 
 class MCPTests(unittest.TestCase):
@@ -176,6 +207,7 @@ class MCPTests(unittest.TestCase):
             'summary': 'Ainda não dá para investigar: falta o GitHub.',
             'messages': {'pt': 'Ainda não dá para investigar: falta o GitHub.'},
             'setup': 'O GitHub ainda não está conectado',
+            'onboarding': 'Oi — sou o Watson, seu colega de engenharia.\n\n/help',
         }
         with patch('watson.mcp.capabilities_report', return_value=fake) as caps:
             response = dispatch(self.home, {
@@ -189,6 +221,7 @@ class MCPTests(unittest.TestCase):
         self.assertFalse(payload['ready_to_investigate'])
         self.assertIn('falta o GitHub', payload['status_summary'])
         self.assertIn('O GitHub ainda não está conectado', payload['setup'])
+        self.assertIn('colega de engenharia', payload['onboarding'])
 
     def test_investigate_preflight_blocks_when_github_missing(self):
         with patch('watson.mcp.require_github', side_effect=WatsonError(
