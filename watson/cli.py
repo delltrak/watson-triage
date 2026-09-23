@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .analysis import Codex, render, triage
 from .core import Store, WatsonError, load_config, private_json, repo_name
-from .issue_ref import resolve_issue_number
+from .issue_ref import resolve_issue_ref
 from .delivery import Plow, deliver
 from .speech import generate_voice
 from .github import GitHub
@@ -125,8 +125,9 @@ def main(argv=None):
                 elif args.command == 'sync':
                     output = sync(store, github, config)
                 elif args.command == 'triage':
-                    number = resolve_issue_number(args.issue, config)
-                    output = triage(store, github, model, config, number)
+                    repo, number = resolve_issue_ref(args.issue, config)
+                    github = GitHub([repo] + config['related_repositories'] + [config['repository']])
+                    output = triage(store, github, model, config, number, repo=repo)
                 elif args.command == 'watch':
                     if not 1 <= args.limit <= 20:
                         raise WatsonError('O limite deve ficar entre 1 e 20.')

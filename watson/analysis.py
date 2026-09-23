@@ -122,8 +122,8 @@ def validate_result(result, evidence):
             raise WatsonError('Afirmação sem referência válida; triagem não será enviada.')
 
 
-def triage(store, github, model, config, number):
-    repo = config['repository']
+def triage(store, github, model, config, number, repo=None):
+    repo = repo or config['repository']
     issue = github.issue(repo, number)
     store.observe(repo, issue)
     refs, limitations = github.references(issue)

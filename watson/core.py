@@ -14,6 +14,14 @@ class WatsonError(Exception):
     pass
 
 
+HOME_NOT_WRITABLE = (
+    'Watson home is not writable; the line owner must fix the install.\n\n'
+    '---\n\n'
+    'A pasta do Watson não tem permissão de escrita; '
+    'o dono da linha precisa corrigir a instalação.'
+)
+
+
 def now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -64,31 +72,36 @@ def load_config(home):
 
 class Store:
     def __init__(self, home):
-        self.home = Path(home).resolve()
-        self.home.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.db = sqlite3.connect(self.home / 'memory.sqlite', timeout=30)
-        os.chmod(self.home / 'memory.sqlite', 0o600)
-        self.db.row_factory = sqlite3.Row
-        self.db.execute('PRAGMA journal_mode=WAL')
-        self.db.executescript('''
-            CREATE TABLE IF NOT EXISTS issues (
-              repo TEXT, number INTEGER, title TEXT, observed TEXT, tracked INTEGER DEFAULT 0,
-              changed INTEGER DEFAULT 0, PRIMARY KEY(repo,number));
-            CREATE TABLE IF NOT EXISTS runs (
-              id INTEGER PRIMARY KEY, repo TEXT, number INTEGER, fingerprint TEXT,
-              started TEXT, completed TEXT, status TEXT, result TEXT, error TEXT,
-              UNIQUE(repo,number,fingerprint));
-            CREATE TABLE IF NOT EXISTS actions (
-              key TEXT PRIMARY KEY, run_id INTEGER, kind TEXT, status TEXT, created TEXT,
-              result TEXT);
-        ''')
-        columns = {row['name'] for row in self.db.execute('PRAGMA table_info(issues)')}
-        if 'checked' not in columns:
-            self.db.execute('ALTER TABLE issues ADD COLUMN checked TEXT')
-        if 'assigned' not in columns:
-            self.db.execute('ALTER TABLE issues ADD COLUMN assigned INTEGER DEFAULT 0')
-            self.db.execute('UPDATE issues SET assigned=1')
-        self.db.commit()
+        try:
+            self.home = Path(home).resolve()
+            self.home.mkdir(parents=True, exist_ok=True, mode=0o700)
+            self.db = sqlite3.connect(self.home / 'memory.sqlite', timeout=30)
+            os.chmod(self.home / 'memory.sqlite', 0o600)
+            self.db.row_factory = sqlite3.Row
+            self.db.execute('PRAGMA journal_mode=WAL')
+            self.db.executescript('''
+                CREATE TABLE IF NOT EXISTS issues (
+                  repo TEXT, number INTEGER, title TEXT, observed TEXT, tracked INTEGER DEFAULT 0,
+                  changed INTEGER DEFAULT 0, PRIMARY KEY(repo,number));
+                CREATE TABLE IF NOT EXISTS runs (
+                  id INTEGER PRIMARY KEY, repo TEXT, number INTEGER, fingerprint TEXT,
+                  started TEXT, completed TEXT, status TEXT, result TEXT, error TEXT,
+                  UNIQUE(repo,number,fingerprint));
+                CREATE TABLE IF NOT EXISTS actions (
+                  key TEXT PRIMARY KEY, run_id INTEGER, kind TEXT, status TEXT, created TEXT,
+                  result TEXT);
+            ''')
+            columns = {row['name'] for row in self.db.execute('PRAGMA table_info(issues)')}
+            if 'checked' not in columns:
+                self.db.execute('ALTER TABLE issues ADD COLUMN checked TEXT')
+            if 'assigned' not in columns:
+                self.db.execute('ALTER TABLE issues ADD COLUMN assigned INTEGER DEFAULT 0')
+                self.db.execute('UPDATE issues SET assigned=1')
+            self.db.commit()
+        except (PermissionError, OSError, sqlite3.OperationalError) as exc:
+            if isinstance(exc, BlockingIOError):
+                raise
+            raise WatsonError(HOME_NOT_WRITABLE) from None
 
     def checked(self, repo, number):
         self.db.execute('UPDATE issues SET checked=?,changed=0 WHERE repo=? AND number=?', (now(), repo, number))
@@ -98,11 +111,17 @@ class Store:
     def lock(self):
         # A process crash releases the OS lock. Runs left running become resumable.
         import fcntl
-        with open(self.home / 'worker.lock', 'a') as f:
+        try:
+            handle = open(self.home / 'worker.lock', 'a')
+        except (PermissionError, OSError):
+            raise WatsonError(HOME_NOT_WRITABLE) from None
+        with handle as f:
             try:
                 fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 raise WatsonError('Outra triagem do Watson está em execução.') from None
+            except (PermissionError, OSError):
+                raise WatsonError(HOME_NOT_WRITABLE) from None
             try:
                 yield
             finally:

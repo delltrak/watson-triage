@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import json
 import sys
+import traceback
 from pathlib import Path
 
 from .analysis import Codex, triage
 from .capabilities import capabilities_report, normalize_language, require_github
 from .core import Store, WatsonError, load_config
-from .issue_ref import resolve_issue_number
+from .issue_ref import resolve_issue_ref
 from .github import GitHub
 
 
@@ -28,9 +29,12 @@ TOOLS = [
          'additionalProperties': False,
      }},
     {'name': 'watson_investigate',
-     'description': 'Investigate an issue in the configured repository with current code and evidence. '
-                    'Accepts number (e.g. 12), #12, or full GitHub URL '
-                    '(e.g. https://github.com/owner/project/issues/12). '
+     'description': 'Investigate a GitHub issue with current code and evidence. '
+                    'Accepts number (e.g. 12), #12 (uses the configured default repository), '
+                    'or a full GitHub issue URL '
+                    '(e.g. https://github.com/owner/project/issues/12) — that URL\'s repository '
+                    'is investigated, not only the default. '
+                    'Repo homepage URLs without /issues/N are rejected with a clear ask for the issue link. '
                     'If GitHub is not connected, returns clear setup instructions instead of pretending. '
                     'May use the Codex subscription. Does not send messages or write to GitHub.',
      'inputSchema': {
@@ -55,6 +59,21 @@ TOOLS = [
 ]
 
 
+def _coerce_arguments(arguments):
+    """Hermes sometimes passes tool arguments as a JSON string."""
+    if isinstance(arguments, dict):
+        return arguments
+    if isinstance(arguments, str):
+        try:
+            loaded = json.loads(arguments)
+        except json.JSONDecodeError as exc:
+            raise WatsonError('Invalid arguments.') from exc
+        if not isinstance(loaded, dict):
+            raise WatsonError('Invalid arguments.')
+        return loaded
+    raise WatsonError('Invalid arguments.')
+
+
 def _issue_argument(arguments):
     keys = set(arguments) - {'language'}
     if keys == {'number'}:
@@ -74,6 +93,26 @@ def _language_argument(arguments):
     return normalize_language(arguments.get('language'))
 
 
+def _status_result(store, language):
+    caps = capabilities_report(language=language)
+    history = store.history()
+    result = {**history, 'capabilities': caps}
+    # Honest top-level flags so agents never invent "all good".
+    result['github_connected'] = caps['github']['connected']
+    result['ready_to_investigate'] = caps['ready_to_investigate']
+    result['status_summary'] = caps['summary']
+    if 'setup' in caps:
+        result['setup'] = caps['setup']
+    return result
+
+
+def _investigate_result(home, store, config, raw, language):
+    require_github(language=language)
+    repo, number = resolve_issue_ref(raw, config)
+    github = GitHub([repo] + config['related_repositories'] + [config['repository']])
+    return triage(store, github, Codex(home, config.get('model')), config, number, repo=repo)
+
+
 def dispatch(home, message):
     method = message.get('method')
     if method == 'initialize':
@@ -91,13 +130,13 @@ def dispatch(home, message):
     params = message.get('params', {})
     name, arguments = params.get('name'), params.get('arguments', {})
     try:
-        if not isinstance(arguments, dict):
-            raise WatsonError('Invalid arguments.')
+        arguments = _coerce_arguments(arguments)
         language = _language_argument(arguments)
         if name == 'watson_status':
             extra = set(arguments) - {'language'}
             if extra:
                 raise WatsonError('Status only accepts optional "language".')
+            raw = None
         elif name == 'watson_investigate':
             raw = _issue_argument(arguments)
         else:
@@ -105,28 +144,21 @@ def dispatch(home, message):
         store = Store(home)
         try:
             config = load_config(Path(home))
-            with store.lock():
-                if name == 'watson_status':
-                    caps = capabilities_report(language=language)
-                    history = store.history()
-                    result = {**history, 'capabilities': caps}
-                    # Honest top-level flags so agents never invent "all good".
-                    result['github_connected'] = caps['github']['connected']
-                    result['ready_to_investigate'] = caps['ready_to_investigate']
-                    result['status_summary'] = caps['summary']
-                    if 'setup' in caps:
-                        result['setup'] = caps['setup']
-                else:
-                    require_github(language=language)
-                    number = resolve_issue_number(raw, config)
-                    github = GitHub([config['repository']] + config['related_repositories'])
-                    result = triage(store, github, Codex(home, config.get('model')), config, number)
+            if name == 'watson_status':
+                # Read-only: do not take the exclusive worker lock.
+                result = _status_result(store, language)
+            else:
+                with store.lock():
+                    result = _investigate_result(home, store, config, raw, language)
             return {'content': [{'type': 'text', 'text': json.dumps(result, ensure_ascii=False)}], 'isError': False}
         finally:
             store.db.close()
+    except WatsonError as exc:
+        return {'content': [{'type': 'text', 'text': str(exc)}], 'isError': True}
     except Exception as exc:
-        # Runtime errors may include URLs or credentials; only expose curated errors.
-        text = str(exc) if isinstance(exc, WatsonError) else 'Internal failure; check the local install.'
+        # Runtime errors may include URLs or credentials; only expose type name.
+        print(traceback.format_exc(), file=sys.stderr, flush=True)
+        text = f'Internal failure ({type(exc).__name__}). Check the local install.'
         return {'content': [{'type': 'text', 'text': text}], 'isError': True}
 
 

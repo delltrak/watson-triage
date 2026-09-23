@@ -10,6 +10,19 @@ CONFIG=${HOME_DIR}/config.yaml
 OVERLAY=/opt/watson-triage/mcp-watson.yaml
 
 install -d -o 10000 -g 10000 -m 0700 "$WATSON_HOME" || true
+# Hermes runs MCP as uid 10000. Root docker-exec can leave root-owned 0600 files
+# that make watson_status fail with PermissionError — reclaim ownership each boot.
+chown -R 10000:10000 "$WATSON_HOME" 2>/dev/null || true
+chmod 0700 "$WATSON_HOME" 2>/dev/null || true
+if [ -f "$WATSON_HOME/memory.sqlite" ]; then
+  chmod 0600 "$WATSON_HOME/memory.sqlite" 2>/dev/null || true
+fi
+if [ -f "$WATSON_HOME/worker.lock" ]; then
+  chmod 0600 "$WATSON_HOME/worker.lock" 2>/dev/null || true
+fi
+if [ -f "$WATSON_HOME/config.json" ]; then
+  chmod 0600 "$WATSON_HOME/config.json" 2>/dev/null || true
+fi
 
 if [ ! -f "$CONFIG" ] || [ ! -f "$OVERLAY" ] || [ ! -x "$PYTHON" ]; then
   echo "watson-mcp: skip merge (config/overlay/python ausente)" >&2

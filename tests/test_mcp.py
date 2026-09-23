@@ -12,7 +12,7 @@ from watson.capabilities import (
     require_github,
 )
 from watson.core import Store, WatsonError, private_json
-from watson.issue_ref import parse_issue_ref, resolve_issue_number
+from watson.issue_ref import parse_issue_ref, resolve_issue_number, resolve_issue_ref
 from watson.mcp import dispatch, serve
 
 
@@ -37,16 +37,31 @@ class IssueRefTests(unittest.TestCase):
             with self.assertRaises(WatsonError):
                 parse_issue_ref(bad)
 
-    def test_resolve_requires_configured_repository(self):
+    def test_resolve_issue_ref_uses_url_or_configured_repository(self):
         config = {'repository': 'demo/repo'}
+        self.assertEqual(resolve_issue_ref('#9', config), ('demo/repo', 9))
         self.assertEqual(resolve_issue_number('#9', config), 9)
         self.assertEqual(
-            resolve_issue_number('https://github.com/demo/repo/issues/9', config), 9)
-        with self.assertRaises(WatsonError) as ctx:
-            resolve_issue_number('https://github.com/other/repo/issues/9', config)
-        self.assertIn('demo/repo', str(ctx.exception))
-        self.assertNotIn('PAT', str(ctx.exception))
-        self.assertNotIn('branch', str(ctx.exception).lower())
+            resolve_issue_ref('https://github.com/demo/repo/issues/9', config),
+            ('demo/repo', 9))
+        self.assertEqual(
+            resolve_issue_ref('https://github.com/other/repo/issues/9', config),
+            ('other/repo', 9))
+        self.assertEqual(
+            resolve_issue_number('https://github.com/other/repo/issues/9', config), 9)
+
+    def test_repo_homepage_asks_for_issue_link(self):
+        for url in [
+            'https://github.com/delltrak/comercial-uniao',
+            'https://github.com/delltrak/comercial-uniao/',
+            'https://www.github.com/delltrak/comercial-uniao?tab=readme',
+        ]:
+            with self.assertRaises(WatsonError) as ctx:
+                parse_issue_ref(url)
+            msg = str(ctx.exception)
+            self.assertIn('issue', msg.lower())
+            self.assertIn('/issues/', msg)
+            self.assertNotIn('PAT', msg)
 
 
 class CapabilityTests(unittest.TestCase):
@@ -221,11 +236,16 @@ class MCPTests(unittest.TestCase):
         self.assertFalse(response['isError'], response)
         triage.assert_called_once()
         self.assertEqual(triage.call_args.args[4], 42)
+        self.assertEqual(triage.call_args.kwargs.get('repo'), 'demo/repo')
         payload = json.loads(response['content'][0]['text'])
         self.assertEqual(payload['run_id'], 1)
 
-    def test_investigate_rejects_foreign_repo_url_in_portuguese(self):
-        with patch('watson.mcp.require_github', return_value={'ok': True}):
+    def test_investigate_uses_foreign_repo_from_issue_url(self):
+        fake = {'run_id': 2, 'cached': True, 'result': {'summary': 'ok', 'repository': 'other/place'}}
+        with patch('watson.mcp.require_github', return_value={'ok': True}), \
+             patch('watson.mcp.triage', return_value=fake) as triage, \
+             patch('watson.mcp.GitHub') as gh, \
+             patch('watson.mcp.Codex'):
             response = dispatch(self.home, {
                 'method': 'tools/call',
                 'params': {
@@ -233,11 +253,94 @@ class MCPTests(unittest.TestCase):
                     'arguments': {'issue': 'https://github.com/other/place/issues/1'},
                 },
             })
+        self.assertFalse(response['isError'], response)
+        triage.assert_called_once()
+        self.assertEqual(triage.call_args.args[4], 1)
+        self.assertEqual(triage.call_args.kwargs.get('repo'), 'other/place')
+        gh.assert_called_once()
+        repos = gh.call_args.args[0]
+        self.assertEqual(repos[0], 'other/place')
+        self.assertIn('demo/repo', repos)
+
+    def test_investigate_repo_homepage_asks_for_issue(self):
+        with patch('watson.mcp.require_github', return_value={'ok': True}):
+            response = dispatch(self.home, {
+                'method': 'tools/call',
+                'params': {
+                    'name': 'watson_investigate',
+                    'arguments': {'issue': 'https://github.com/delltrak/comercial-uniao'},
+                },
+            })
         self.assertTrue(response['isError'])
         text = response['content'][0]['text']
-        self.assertIn('demo/repo', text)
+        self.assertIn('/issues/', text)
+        self.assertNotIn('Internal failure', text)
+        self.assertNotIn('watson-triage', text)
         self.assertNotIn('Docker', text)
-        self.assertNotIn('PAT', text)
+
+    def test_arguments_json_string_coerced(self):
+        fake = {'run_id': 3, 'cached': True, 'result': {'summary': 'ok'}}
+        with patch('watson.mcp.require_github', return_value={'ok': True}), \
+             patch('watson.mcp.triage', return_value=fake) as triage, \
+             patch('watson.mcp.GitHub'), \
+             patch('watson.mcp.Codex'):
+            response = dispatch(self.home, {
+                'method': 'tools/call',
+                'params': {
+                    'name': 'watson_investigate',
+                    'arguments': json.dumps({'issue': 'https://github.com/demo/repo/issues/5'}),
+                },
+            })
+        self.assertFalse(response['isError'], response)
+        self.assertEqual(triage.call_args.args[4], 5)
+
+    def test_internal_failure_includes_exception_type(self):
+        err = io.StringIO()
+        with patch('watson.mcp.require_github', return_value={'ok': True}), \
+             patch('watson.mcp.resolve_issue_ref', side_effect=RuntimeError('boom')), \
+             patch('watson.mcp.sys.stderr', err):
+            response = dispatch(self.home, {
+                'method': 'tools/call',
+                'params': {
+                    'name': 'watson_investigate',
+                    'arguments': {'number': 1},
+                },
+            })
+        self.assertTrue(response['isError'])
+        self.assertEqual(
+            response['content'][0]['text'],
+            'Internal failure (RuntimeError). Check the local install.')
+        self.assertIn('RuntimeError', err.getvalue())
+
+    def test_status_does_not_take_worker_lock(self):
+        with patch('watson.mcp.capabilities_report', return_value={
+            'github': {'connected': True, 'reason': 'ok', 'login': 'x'},
+            'codex': {'connected': False, 'reason': 'cli_missing'},
+            'ready_to_investigate': False,
+            'summary': 'ok-ish',
+        }), patch.object(Store, 'lock', side_effect=AssertionError('status must not lock')):
+            response = dispatch(self.home, {
+                'method': 'tools/call',
+                'params': {'name': 'watson_status', 'arguments': {}},
+            })
+        self.assertFalse(response['isError'], response)
+
+    def test_store_permission_error_becomes_watson_error(self):
+        from watson.core import HOME_NOT_WRITABLE, Store as RealStore
+        with patch.object(Path, 'mkdir', side_effect=PermissionError('denied')):
+            with self.assertRaises(WatsonError) as ctx:
+                RealStore(self.home / 'nope')
+        self.assertEqual(str(ctx.exception), HOME_NOT_WRITABLE)
+
+        with patch('watson.mcp.Store', side_effect=WatsonError(HOME_NOT_WRITABLE)):
+            response = dispatch(self.home, {
+                'method': 'tools/call',
+                'params': {'name': 'watson_status', 'arguments': {}},
+            })
+        self.assertTrue(response['isError'])
+        self.assertIn('not writable', response['content'][0]['text'])
+        self.assertIn('não tem permissão', response['content'][0]['text'])
+        self.assertNotIn('Internal failure', response['content'][0]['text'])
 
     def test_require_github_raises_curated_error(self):
         with patch('watson.capabilities.check_github', return_value={
