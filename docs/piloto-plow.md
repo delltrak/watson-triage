@@ -17,9 +17,9 @@ iMessage Plow que o João já tem; reutilizamos a credencial dessa linha.
 | `runtime/mcp-watson.yaml` | Bloco `mcp_servers.watson` → `watson mcp` (stdio, só leitura) |
 | `image/cont-init.d/20-watson-mcp` | Garante home Watson + merge do MCP em boots com volume existente |
 
-Ainda **não** implementa parser completo de URL de issue no chat nem repair via
-MCP. A ponte MCP expõe só `watson_status` e `watson_investigate` (ver
-[hermes-plow.md](hermes-plow.md)).
+`watson_investigate` aceita **número ou URL** de issue (parser no núcleo +
+ponte MCP). Ainda **não** expõe repair/draft-PR via MCP. A ponte continua só
+leitura: `watson_status` e `watson_investigate` (ver [hermes-plow.md](hermes-plow.md)).
 
 ## Pré-requisitos
 
