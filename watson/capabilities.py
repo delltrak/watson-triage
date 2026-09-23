@@ -185,6 +185,13 @@ def require_github(language=None, run=subprocess.run):
     raise WatsonError(github_missing_message(github, language))
 
 
+def require_codex(language=None, run=subprocess.run):
+    codex = check_codex(run=run)
+    if codex['ok']:
+        return codex
+    raise WatsonError(message_for(_CODEX_MISSING, language))
+
+
 def capabilities_report(language=None, run=subprocess.run):
     github = check_github(run=run)
     codex = check_codex(run=run)

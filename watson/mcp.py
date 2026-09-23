@@ -7,7 +7,7 @@ import traceback
 from pathlib import Path
 
 from .analysis import Codex, triage
-from .capabilities import capabilities_report, normalize_language, require_github
+from .capabilities import capabilities_report, normalize_language, require_codex, require_github
 from .core import Store, WatsonError, load_config
 from .issue_ref import resolve_issue_ref
 from .github import GitHub
@@ -108,6 +108,7 @@ def _status_result(store, language):
 
 def _investigate_result(home, store, config, raw, language):
     require_github(language=language)
+    require_codex(language=language)
     repo, number = resolve_issue_ref(raw, config)
     github = GitHub([repo] + config['related_repositories'] + [config['repository']])
     return triage(store, github, Codex(home, config.get('model')), config, number, repo=repo)

@@ -71,6 +71,12 @@ class Codex:
             try:
                 completed = self.run(command + ['-'], input=prompt, capture_output=True,
                                      text=True, timeout=420, env=env)
+            except FileNotFoundError:
+                raise WatsonError(
+                    'Codex is not available in this environment (CLI missing), so I cannot finish the investigation.\n\n'
+                    '---\n\n'
+                    'O Codex não está disponível neste ambiente (CLI ausente), então não consigo concluir a investigação.'
+                ) from None
             except subprocess.TimeoutExpired:
                 raise WatsonError('O Codex excedeu 7 minutos; a investigação pode ser tentada novamente.') from None
             audit = {'at': now(), 'label': label, 'usage': [], 'item_types': []}
