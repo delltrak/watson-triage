@@ -162,13 +162,20 @@ class Store:
             raise WatsonError('Investigação não encontrada.')
         return dict(row)
 
-    def claim_action(self, run_id, kind, payload):
+    def stage_action(self, run_id, kind, payload):
+        """Write the claim WITHOUT committing, so a caller can bind it to
+        another write in one transaction. See `claim_action`.
+        """
         key = digest({'run': run_id, 'kind': kind, 'payload': payload})
         try:
             self.db.execute("INSERT INTO actions VALUES(?,?,?,'sending',?,NULL)", (key, run_id, kind, now()))
-            self.db.commit()
         except sqlite3.IntegrityError:
             raise WatsonError('Esta ação já foi tentada. Confira o histórico antes de reenviar.') from None
+        return key
+
+    def claim_action(self, run_id, kind, payload):
+        key = self.stage_action(run_id, kind, payload)
+        self.db.commit()
         return key
 
     def action_result(self, key, status, result):

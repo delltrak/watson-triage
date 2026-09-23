@@ -19,6 +19,19 @@ class Cases:
         return dict(row, data=json.loads(row['data'])) if row else None
 
     def save(self, repo, number, cursor, state, data):
+        """Commit the cursor, and anything staged beside it, as ONE transaction.
+
+        The cursor is a point of no return: once it advances, the next cycle
+        reads the issue as unchanged. A pending action staged before this call
+        therefore has to land with it or not at all -- committed separately, a
+        failure between the two leaves a claim with no cursor (the retry
+        collides with its own key and the issue is stuck for good) or a cursor
+        with no claim (the update is silently dropped).
+
+        Rollback is not owned here. `cycle()`'s per-issue handler aborts the
+        transaction for every failure in the issue, including ones that never
+        reach this method.
+        """
         self.store.db.execute('''INSERT INTO cases VALUES(?,?,?,?,?,?) ON CONFLICT(repo,number)
           DO UPDATE SET cursor=excluded.cursor,state=excluded.state,data=excluded.data,updated=excluded.updated''',
           (repo,number,cursor,state,json.dumps(data,ensure_ascii=False),now()))

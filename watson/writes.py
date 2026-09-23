@@ -26,7 +26,15 @@ class GitHubWriter:
             raise WatsonError('Operação GitHub não confirmada; conferir o histórico antes de repetir.')
         return json.loads(result.stdout)
 
-    def comment(self, store, github, run_id, issue, text, kind):
+    def prepare(self, store, github, run_id, issue, text, kind):
+        """Everything fallible that has no side effect: the fresh read, the
+        state checks, the idempotency marker.
+
+        Split from the send because the caller checkpoints between them. A
+        failure here used to land AFTER that checkpoint, which marked the issue
+        handled with nothing posted and no next look -- see the ordering note
+        in workflow.cycle().
+        """
         # The target and author come from a fresh trusted GitHub response, not the model.
         fresh = github.issue(self.repo, issue['number'])
         if fresh['state'] != 'open':
@@ -38,10 +46,24 @@ class GitHubWriter:
         marker = f'{MARKER}{digest(payload)} -->'
         existing = next((c for c in fresh['comments'] if marker in c['body']), None)
         if existing:
-            return {'url':existing['url'],'recovered':True}
-        key = store.claim_action(run_id, 'github_comment', payload)
+            return {'existing':{'url':existing['url'],'recovered':True}}
+        # STAGED, not committed: the claim rides the caller's cursor commit, so
+        # the two land together or neither does. Claiming after the checkpoint
+        # loses the update when it fails; claiming in its own transaction before
+        # the checkpoint strands a key that every retry then collides with.
+        key = store.stage_action(run_id, 'github_comment', payload)
+        return {'payload':payload,'marker':marker,'text':text,'number':issue['number'],
+                'key':key,'existing':None}
+
+    def send(self, store, pending):
+        """Post the claimed comment. The only uncertainty left after the
+        checkpoint, which is what the claim above exists to adjudicate."""
+        if pending['existing']:
+            return pending['existing']
+        key = pending['key']
         try:
-            result = self.post(f'issues/{issue["number"]}/comments', {'body':text+'\n\n'+marker})
+            result = self.post(f'issues/{pending["number"]}/comments',
+                               {'body':pending['text']+'\n\n'+pending['marker']})
             receipt = {'url':result['html_url'],'id':result['id']}
             store.action_result(key,'accepted',receipt)
             return receipt
