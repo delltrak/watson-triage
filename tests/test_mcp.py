@@ -172,6 +172,52 @@ class CapabilityTests(unittest.TestCase):
         self.assertIn('pede pra conectar aqui no chat', text)
         self.assertNotIn('conectar uma vez nesta linha', text)
 
+    def test_speak_this_gates_always_populated(self):
+        fake_gh = {
+            'ok': True, 'reason': 'token_env', 'connected': True, 'login': 'delltrak',
+        }
+        fake_codex = {'ok': False, 'reason': 'not_authenticated', 'connected': False}
+        fake_claude = {'ok': False, 'reason': 'not_authenticated', 'connected': False}
+        with patch('watson.capabilities.check_github', return_value=fake_gh), \
+             patch('watson.capabilities.check_codex', return_value=fake_codex), \
+             patch('watson.capabilities.check_claude', return_value=fake_claude):
+            report = capabilities_report(language='pt')
+        self.assertTrue(report['do_not_invent'])
+        self.assertEqual(
+            report['instruction'],
+            'Send speak_this to the user. Do not change connection facts.',
+        )
+        self.assertEqual(report['speak_this'], report['onboarding'])
+        self.assertEqual(report['user_message'], report['speak_this'])
+        text = report['speak_this']
+        # Honesty: GitHub connected — must not claim missing.
+        self.assertIn('conectado como delltrak', text)
+        self.assertNotIn('ainda não conectado', text)
+        self.assertNotIn('falta o GitHub', text.lower())
+        self.assertNotIn('falta conectar algumas coisas', text)
+        # Codex/Claude still need connect.
+        self.assertIn('**Codex CLI**', text)
+        self.assertIn('sem login', text)
+        self.assertIn('**Claude Code CLI**', text)
+        self.assertIn('pede pra conectar aqui no chat', text)
+
+    def test_speak_this_honesty_when_github_missing(self):
+        fake_gh = {
+            'ok': False, 'reason': 'not_authenticated', 'connected': False, 'login': None,
+        }
+        fake_codex = {'ok': True, 'reason': 'authenticated', 'connected': True}
+        fake_claude = {'ok': True, 'reason': 'authenticated', 'connected': True}
+        with patch('watson.capabilities.check_github', return_value=fake_gh), \
+             patch('watson.capabilities.check_codex', return_value=fake_codex), \
+             patch('watson.capabilities.check_claude', return_value=fake_claude):
+            en = capabilities_report(language='en')
+        self.assertTrue(en['do_not_invent'])
+        self.assertIn('not connected yet', en['speak_this'].lower())
+        self.assertIn('**GitHub**', en['speak_this'])
+        # Must not invent Codex/Claude as missing when they are ok.
+        self.assertIn('available.', en['speak_this'])
+        self.assertNotIn('not logged in', en['speak_this'])
+
 
 class MCPTests(unittest.TestCase):
     def setUp(self):
@@ -226,6 +272,10 @@ class MCPTests(unittest.TestCase):
             'messages': {'pt': 'Ainda não dá para investigar: falta o GitHub.'},
             'setup': 'O GitHub ainda não está conectado',
             'onboarding': 'Oi — sou o Watson, seu colega de engenharia.\n\n/help',
+            'speak_this': 'Oi — sou o Watson, seu colega de engenharia.\n\n/help',
+            'user_message': 'Oi — sou o Watson, seu colega de engenharia.\n\n/help',
+            'do_not_invent': True,
+            'instruction': 'Send speak_this to the user. Do not change connection facts.',
         }
         with patch('watson.mcp.capabilities_report', return_value=fake) as caps:
             response = dispatch(self.home, {
@@ -240,6 +290,52 @@ class MCPTests(unittest.TestCase):
         self.assertIn('falta o GitHub', payload['status_summary'])
         self.assertIn('O GitHub ainda não está conectado', payload['setup'])
         self.assertIn('colega de engenharia', payload['onboarding'])
+        self.assertEqual(payload['speak_this'], payload['onboarding'])
+        self.assertEqual(payload['user_message'], payload['speak_this'])
+        self.assertTrue(payload['do_not_invent'])
+        self.assertIn('Do not change connection facts', payload['instruction'])
+
+    def test_status_speak_this_matches_github_connected_partial(self):
+        """Top-level speak_this must match real GitHub connected + Codex/Claude gaps."""
+        fake = {
+            'github': {'connected': True, 'reason': 'token_env', 'login': 'delltrak'},
+            'codex': {'connected': False, 'reason': 'not_authenticated'},
+            'claude': {'connected': False, 'reason': 'not_authenticated'},
+            'ready_to_investigate': True,
+            'summary': 'Pronto',
+            'onboarding': (
+                'Oi — sou o Watson.\n\n'
+                '1. **GitHub** — conectado como delltrak.\n\n'
+                '2. **Codex CLI** — instalado mas sem login.\n\n'
+                '3. **Claude Code CLI** — instalado mas sem login.'
+            ),
+            'speak_this': (
+                'Oi — sou o Watson.\n\n'
+                '1. **GitHub** — conectado como delltrak.\n\n'
+                '2. **Codex CLI** — instalado mas sem login.\n\n'
+                '3. **Claude Code CLI** — instalado mas sem login.'
+            ),
+            'user_message': (
+                'Oi — sou o Watson.\n\n'
+                '1. **GitHub** — conectado como delltrak.\n\n'
+                '2. **Codex CLI** — instalado mas sem login.\n\n'
+                '3. **Claude Code CLI** — instalado mas sem login.'
+            ),
+            'do_not_invent': True,
+            'instruction': 'Send speak_this to the user. Do not change connection facts.',
+        }
+        with patch('watson.mcp.capabilities_report', return_value=fake):
+            response = dispatch(self.home, {
+                'method': 'tools/call',
+                'params': {'name': 'watson_status', 'arguments': {'language': 'pt'}},
+            })
+        self.assertFalse(response['isError'])
+        payload = json.loads(response['content'][0]['text'])
+        self.assertTrue(payload['github_connected'])
+        self.assertIn('conectado como delltrak', payload['speak_this'])
+        self.assertNotIn('ainda não conectado', payload['speak_this'])
+        self.assertIn('sem login', payload['speak_this'])
+        self.assertTrue(payload['do_not_invent'])
 
     def test_investigate_preflight_blocks_when_github_missing(self):
         with patch('watson.mcp.require_github', side_effect=WatsonError(

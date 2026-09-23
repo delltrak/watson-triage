@@ -17,12 +17,13 @@ from .oauth_connect import connect_claude, connect_codex
 TOOLS = [
     {'name': 'watson_status',
      'description': 'Check whether GitHub, Codex, and Claude are connected, plus tracked '
-                    'issues and triage history. ALWAYS call this on the first user greeting '
-                    '(oi/olá/hey/hi) BEFORE answering, and pass language=pt when the user '
-                    'wrote Portuguese (including short openers like "oi"). Returns '
-                    '`onboarding` — ready-to-send first-greeting copy to relay (do not invent '
-                    'a "Plow assistant" pitch or an owner name). '
-                    'Optional language: en, pt, or auto.',
+                    'issues and triage history. ALWAYS call this on ANY greeting '
+                    '(oi/olá/hey/hi), status ask, or "what\'s missing" BEFORE answering, '
+                    'and pass language=pt when the user wrote Portuguese (including short '
+                    'openers like "oi"). Returns `speak_this` / `user_message` / `onboarding` '
+                    '(same ready-to-send copy — relay verbatim), plus `do_not_invent: true` '
+                    'and `instruction`. NEVER invent connection status; only report fields '
+                    'from this JSON. Optional language: en, pt, or auto.',
      'inputSchema': {
          'type': 'object',
          'properties': {
@@ -162,11 +163,23 @@ def _status_result(store, language):
     result['github_connected'] = caps['github']['connected']
     result['ready_to_investigate'] = caps['ready_to_investigate']
     result['status_summary'] = caps['summary']
-    # Ready-to-send first greeting — relay this, do not invent a Plow pitch.
-    if 'onboarding' in caps:
+    # Ready-to-send copy — relay speak_this, do not invent connection facts.
+    speak = caps.get('speak_this') or caps.get('user_message') or caps.get('onboarding')
+    if speak is not None:
+        result['speak_this'] = speak
+        result['user_message'] = speak
+        result['onboarding'] = caps.get('onboarding', speak)
+    elif 'onboarding' in caps:
         result['onboarding'] = caps['onboarding']
+        result['speak_this'] = caps['onboarding']
+        result['user_message'] = caps['onboarding']
     if 'setup' in caps:
         result['setup'] = caps['setup']
+    result['do_not_invent'] = bool(caps.get('do_not_invent', True))
+    result['instruction'] = caps.get(
+        'instruction',
+        'Send speak_this to the user. Do not change connection facts.',
+    )
     return result
 
 

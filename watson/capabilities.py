@@ -480,6 +480,15 @@ def capabilities_report(language=None, run=subprocess.run):
     onboarding = _onboarding_copy(
         github, codex, claude, checklist_en, checklist_pt, setup_messages)
 
+    # Always-populated ready-to-send copy (greetings + status asks).
+    # When language is unset, default speak_this to PT then EN split — models
+    # should still prefer the language-specific call; bilingual body mirrors
+    # onboarding via message_for.
+    speak = message_for(onboarding, lang)
+    instruction = (
+        'Send speak_this to the user. Do not change connection facts.'
+    )
+
     report = {
         'github': {
             'connected': github['ok'],
@@ -497,11 +506,15 @@ def capabilities_report(language=None, run=subprocess.run):
         'ready_to_investigate': bool(github['ok']),
         'summary': message_for(summary, lang),
         'messages': summary if lang is None else {lang: summary[lang]},
-        # First-greeting copy the chat agent should relay (not invent).
-        'onboarding': message_for(onboarding, lang),
+        # First-greeting / status copy the chat agent must relay (not invent).
+        'onboarding': speak,
         'onboarding_messages': (
             onboarding if lang is None else {lang: onboarding[lang]}
         ),
+        'speak_this': speak,
+        'user_message': speak,
+        'do_not_invent': True,
+        'instruction': instruction,
     }
     if setup_messages:
         report['setup'] = (
