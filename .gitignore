@@ -13,3 +13,6 @@ auth.json
 .DS_Store
 github-credentials*
 !github-credentials.example
+e2e/.lab-state.json
+e2e/.lab-clone/
+e2e/reports/
