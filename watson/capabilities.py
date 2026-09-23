@@ -56,6 +56,33 @@ _CODEX_MISSING = {
     'pt': 'O Codex não está disponível neste ambiente (login/CLI local ausente).',
 }
 
+_CODEX_LOGIN = {
+    'en': (
+        'Codex CLI is installed but not logged in yet. The owner needs to connect '
+        'Codex once on this line (local login), then ask me again.'
+    ),
+    'pt': (
+        'O Codex CLI está instalado, mas ainda sem login. O dono precisa conectar '
+        'o Codex uma vez nesta linha (login local) e me pedir de novo.'
+    ),
+}
+
+_CLAUDE_MISSING = {
+    'en': 'Claude Code is not available in this environment (local login/CLI missing).',
+    'pt': 'O Claude Code não está disponível neste ambiente (login/CLI local ausente).',
+}
+
+_CLAUDE_LOGIN = {
+    'en': (
+        'Claude Code CLI is installed but not logged in yet. The owner needs to '
+        'connect Claude once on this line (local login), then ask me again.'
+    ),
+    'pt': (
+        'O Claude Code CLI está instalado, mas ainda sem login. O dono precisa '
+        'conectar o Claude uma vez nesta linha (login local) e me pedir de novo.'
+    ),
+}
+
 
 def normalize_language(value):
     if value is None or value == '' or value == 'auto':
@@ -162,13 +189,31 @@ def check_github(run=subprocess.run):
 def check_codex(run=subprocess.run):
     if not shutil.which('codex'):
         return {'ok': False, 'reason': 'cli_missing', 'connected': False}
-    # Best-effort: presence of CLI is enough for status honesty; login probed lightly.
     probe = _run(['codex', 'login', 'status'], run, timeout=15)
-    if probe.returncode == 0:
+    combined = ((probe.stdout or '') + (probe.stderr or '')).lower()
+    if probe.returncode == 0 and 'not logged in' not in combined:
         return {'ok': True, 'reason': 'authenticated', 'connected': True}
+    if 'not logged in' in combined or 'logged in: false' in combined:
+        return {'ok': False, 'reason': 'not_authenticated', 'connected': False}
     # Older/newer CLIs may not support this subcommand; treat binary as present.
-    if probe.returncode == 2 or 'usage' in ((probe.stderr or '') + (probe.stdout or '')).lower():
+    if probe.returncode == 2 or 'usage' in combined:
         return {'ok': True, 'reason': 'cli_present', 'connected': True}
+    return {'ok': False, 'reason': 'not_authenticated', 'connected': False}
+
+
+def check_claude(run=subprocess.run):
+    if not shutil.which('claude'):
+        return {'ok': False, 'reason': 'cli_missing', 'connected': False}
+    probe = _run(['claude', 'auth', 'status'], run, timeout=15)
+    combined = (probe.stdout or '') + (probe.stderr or '')
+    compact = combined.lower().replace(' ', '').replace('_', '')
+    if '"loggedin":true' in compact:
+        return {'ok': True, 'reason': 'authenticated', 'connected': True}
+    if '"loggedin":false' in compact or 'not logged' in combined.lower():
+        return {'ok': False, 'reason': 'not_authenticated', 'connected': False}
+    if probe.returncode == 2 or 'usage' in combined.lower():
+        return {'ok': True, 'reason': 'cli_present', 'connected': True}
+    # CLI present but auth unclear — do not claim connected.
     return {'ok': False, 'reason': 'not_authenticated', 'connected': False}
 
 
@@ -189,12 +234,39 @@ def require_codex(language=None, run=subprocess.run):
     codex = check_codex(run=run)
     if codex['ok']:
         return codex
+    if codex.get('reason') == 'not_authenticated':
+        raise WatsonError(message_for(_CODEX_LOGIN, language))
     raise WatsonError(message_for(_CODEX_MISSING, language))
+
+
+def codex_status_message(codex, language=None):
+    if codex.get('ok'):
+        mapping = {
+            'en': 'Codex available.',
+            'pt': 'Codex disponível.',
+        }
+        return message_for(mapping, language)
+    if codex.get('reason') == 'not_authenticated':
+        return message_for(_CODEX_LOGIN, language)
+    return message_for(_CODEX_MISSING, language)
+
+
+def claude_status_message(claude, language=None):
+    if claude.get('ok'):
+        mapping = {
+            'en': 'Claude Code available.',
+            'pt': 'Claude Code disponível.',
+        }
+        return message_for(mapping, language)
+    if claude.get('reason') == 'not_authenticated':
+        return message_for(_CLAUDE_LOGIN, language)
+    return message_for(_CLAUDE_MISSING, language)
 
 
 def capabilities_report(language=None, run=subprocess.run):
     github = check_github(run=run)
     codex = check_codex(run=run)
+    claude = check_claude(run=run)
     lang = normalize_language(language) if language not in (None, '') else None
 
     if github['ok']:
@@ -212,14 +284,14 @@ def capabilities_report(language=None, run=subprocess.run):
         status_en = 'GitHub not connected.'
         status_pt = 'GitHub não conectado.'
 
-    if codex['ok']:
-        codex_en, codex_pt = 'Codex available.', 'Codex disponível.'
-    else:
-        codex_en, codex_pt = _CODEX_MISSING['en'], _CODEX_MISSING['pt']
+    codex_en = codex_status_message(codex, 'en')
+    codex_pt = codex_status_message(codex, 'pt')
+    claude_en = claude_status_message(claude, 'en')
+    claude_pt = claude_status_message(claude, 'pt')
 
     summary = {
-        'en': f'{status_en} {codex_en}'.strip(),
-        'pt': f'{status_pt} {codex_pt}'.strip(),
+        'en': f'{status_en} {codex_en} {claude_en}'.strip(),
+        'pt': f'{status_pt} {codex_pt} {claude_pt}'.strip(),
     }
     setup_messages = None
     if not github['ok']:
@@ -232,12 +304,16 @@ def capabilities_report(language=None, run=subprocess.run):
             + status_en
             + ' '
             + codex_en
+            + ' '
+            + claude_en
         )
         summary['pt'] = (
             'Ainda não dá para investigar: falta o GitHub. '
             + status_pt
             + ' '
             + codex_pt
+            + ' '
+            + claude_pt
         )
 
     report = {
@@ -249,6 +325,10 @@ def capabilities_report(language=None, run=subprocess.run):
         'codex': {
             'connected': codex['ok'],
             'reason': codex['reason'],
+        },
+        'claude': {
+            'connected': claude['ok'],
+            'reason': claude['reason'],
         },
         'ready_to_investigate': bool(github['ok']),
         'summary': message_for(summary, lang),

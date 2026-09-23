@@ -103,8 +103,10 @@ class CapabilityTests(unittest.TestCase):
     def test_capabilities_report_never_all_ok_when_gh_missing(self):
         fake_gh = {'ok': False, 'reason': 'not_authenticated', 'connected': False, 'login': None}
         fake_codex = {'ok': True, 'reason': 'cli_present', 'connected': True}
+        fake_claude = {'ok': True, 'reason': 'cli_present', 'connected': True}
         with patch('watson.capabilities.check_github', return_value=fake_gh), \
-             patch('watson.capabilities.check_codex', return_value=fake_codex):
+             patch('watson.capabilities.check_codex', return_value=fake_codex), \
+             patch('watson.capabilities.check_claude', return_value=fake_claude):
             report = capabilities_report(language='en')
         self.assertFalse(report['ready_to_investigate'])
         self.assertFalse(report['github']['connected'])

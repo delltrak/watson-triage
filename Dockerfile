@@ -52,8 +52,17 @@ RUN set -eu; \
     apt-get update; \
     apt-get install -y --no-install-recommends gh; \
     rm -rf /var/lib/apt/lists/*; \
-    gh --version
+    gh --version; \
+    git --version
 
+# Codex CLI + Claude Code CLI (latest). Node/npm already on plow-hermes base.
+# --allow-scripts required so Claude Code postinstall links the native binary.
+RUN set -eu; \
+    npm install -g --allow-scripts=@anthropic-ai/claude-code \
+      @openai/codex@latest \
+      @anthropic-ai/claude-code@latest; \
+    codex --version; \
+    claude --version
 
 # Estado Watson sob o home Hermes (volume agent-home). Criado de novo no boot.
 COPY --chmod=0755 image/cont-init.d/20-watson-mcp /etc/cont-init.d/20-watson-mcp
