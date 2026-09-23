@@ -371,6 +371,33 @@ class CapabilityTests(unittest.TestCase):
         self.assertEqual(env, {'PLOW_AGENT_TOKEN': 'real', 'HOME': '/var/lib/hermes'})
 
 
+class LanguageDefaultTests(unittest.TestCase):
+    def test_status_and_connect_follow_the_remembered_language(self):
+        from watson.language import remember_language
+        with tempfile.TemporaryDirectory() as folder:
+            home = Path(folder)
+            Store(home).db.close()
+            private_json(home / 'config.json', {'repository': 'demo/repo', 'assignee': 'o',
+                                                 'related_repositories': []})
+            remember_language(home, 'en')
+            seen = {}
+
+            def fake_status(store, language):
+                seen['status'] = language
+                return {'speak_this': 'x'}
+
+            def fake_connect(home_arg, language=None, restart=False, cancel=False):
+                seen['connect'] = language
+                return {'ok': True}
+
+            with patch('watson.mcp._status_result', side_effect=fake_status), \
+                 patch('watson.mcp.connect_codex', side_effect=fake_connect):
+                dispatch(home, {'method': 'tools/call', 'params': {'name': 'watson_status', 'arguments': {}}})
+                dispatch(home, {'method': 'tools/call',
+                                'params': {'name': 'watson_connect_codex', 'arguments': {'language': 'auto'}}})
+            self.assertEqual(seen, {'status': 'en', 'connect': 'en'})
+
+
 class MCPTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

@@ -18,6 +18,7 @@ from .capabilities import (
     SECRET_ENV_KEYS, check_claude, check_codex, message_for, normalize_language,
 )
 from .core import WatsonError
+from .language import preferred_language
 
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
 _URL_RE = re.compile(r'https://[^\s<>\'\"\]\)]+')
@@ -536,7 +537,7 @@ def _spawn_auth_waiter(home: Path, provider: str, language) -> int | None:
         old = None
     _terminate_pid(old)
 
-    lang = language if language not in (None, '') else 'pt'
+    lang = language if language not in (None, '') else preferred_language(home)
     # Prefer installed package entry; fall back to -m for editable installs.
     cmd = [
         sys.executable or 'python3', '-c',
@@ -650,7 +651,7 @@ def connect_codex(home, language=None, *, restart=False, cancel=False):
             and existing.get('auth_url')
             and _pid_alive(existing.get('pid'))
         ):
-            lang = language if language not in (None, '') else existing.get('language') or 'pt'
+            lang = language if language not in (None, '') else existing.get('language') or preferred_language(home)
             if not _pid_alive(existing.get('waiter_pid')):
                 _spawn_auth_waiter(home, 'codex', lang)
             msg = _message_waiting_codex(
@@ -684,7 +685,7 @@ def connect_codex(home, language=None, *, restart=False, cancel=False):
         'auth_url': url,
         'user_code': user_code,
         'status': 'waiting_browser',
-        'language': language if language not in (None, '') else 'pt',
+        'language': language if language not in (None, '') else preferred_language(home),
     })
     _save_state(home, 'codex', state)
     _spawn_auth_waiter(home, 'codex', state['language'])
@@ -774,7 +775,7 @@ def connect_claude(home, language=None, *, code=None, restart=False, cancel=Fals
         # Ensure a waiter is watching — MCP turn may return before CLI finishes.
         _spawn_auth_waiter(
             home, 'claude',
-            language if language not in (None, '') else existing.get('language') or 'pt')
+            language if language not in (None, '') else existing.get('language') or preferred_language(home))
         return _public_result(
             'claude', existing, language,
             message=_message_code_accepted(language))
@@ -791,7 +792,7 @@ def connect_claude(home, language=None, *, code=None, restart=False, cancel=Fals
             and existing.get('auth_url')
             and _pid_alive(existing.get('pid'))
         ):
-            lang = language if language not in (None, '') else existing.get('language') or 'pt'
+            lang = language if language not in (None, '') else existing.get('language') or preferred_language(home)
             if not _pid_alive(existing.get('waiter_pid')):
                 _spawn_auth_waiter(home, 'claude', lang)
             msg = _message_waiting_claude(existing['auth_url'], language)
@@ -822,7 +823,7 @@ def connect_claude(home, language=None, *, code=None, restart=False, cancel=Fals
         'auth_url': url,
         'status': 'waiting_code',
         'needs_paste_code': True,
-        'language': language if language not in (None, '') else 'pt',
+        'language': language if language not in (None, '') else preferred_language(home),
     })
     _save_state(home, 'claude', state)
     # Waiter pings when auth completes after the pasted code (or if CLI finishes alone).

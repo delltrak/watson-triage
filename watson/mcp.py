@@ -12,6 +12,7 @@ from .capabilities import (
 )
 from .core import Store, WatsonError, load_config
 from .issue_ref import resolve_issue_ref
+from .language import preferred_language
 from .github import GitHub
 from .oauth_connect import connect_claude, connect_codex
 
@@ -22,7 +23,7 @@ TOOLS = [
                     'issues and triage history. ALWAYS call this on ANY greeting '
                     '(oi/olá/hey/hi), status ask, or "what\'s missing" BEFORE answering, '
                     'and pass language=pt when the user wrote Portuguese (including short '
-                    'openers like "oi"). Returns `speak_this` / `user_message` / `onboarding` '
+                    'openers like "oi") or language=en for English. Returns `speak_this` / `user_message` / `onboarding` '
                     '(same ready-to-send copy — your entire reply MUST be exactly '
                     'speak_this, character-for-character; no paraphrase or added setup), '
                     'plus `do_not_invent: true` and `instruction`. NEVER invent connection '
@@ -46,7 +47,12 @@ TOOLS = [
                     'Repo homepage URLs without /issues/N are rejected with a clear ask for the issue link. '
                     'If GitHub is not connected, returns a short not-connected note (never a token/setup '
                     'tutorial) instead of pretending. '
-                    'May use the Codex subscription. Does not send messages or write to GitHub.',
+                    'Reads the issue timeline: when a linked PR already delivers the issue (or is still open), '
+                    'the result has speak_first — start your reply with speak_first exactly, then summarize '
+                    'the rest in the same language. Always pass language (en or pt) matching the user; the '
+                    'investigation text comes back in that language. '
+                    'May use the Codex subscription. Does not send messages or write to GitHub '
+                    '(Watson suggests closing an issue; it never closes it).',
      'inputSchema': {
          'type': 'object',
          'properties': {
@@ -61,7 +67,8 @@ TOOLS = [
              },
              'language': {
                  'type': 'string',
-                 'description': 'Language for error/setup messages: en, pt, or auto.',
+                 'description': 'Language of the investigation text and messages: en or pt '
+                                '(mirror the user).',
              },
          },
          'additionalProperties': False,
@@ -193,10 +200,21 @@ def _investigate_result(home, store, config, raw, language):
     # Validate the issue ref first so a repo homepage asks for /issues/N
     # instead of being overshadowed by GitHub/Codex preflight messages.
     repo, number = resolve_issue_ref(raw, config)
+    # Explicit language (the chat mirrors the owner) > remembered owner language > line default.
+    language = language or preferred_language(home, config)
     require_github(language=language)
     require_codex(language=language)
     github = GitHub([repo] + config['related_repositories'] + [config['repository']])
-    return triage(store, github, Codex(home, config.get('model')), config, number, repo=repo)
+    out = triage(store, github, Codex(home, config.get('model')), config, number, repo=repo,
+                 language=language)
+    action = out['result'].get('issue_action') or {}
+    if action.get('lead') and action.get('say'):
+        # Deterministic lead line (like speak_this): the chat model must not paraphrase it away.
+        out['speak_first'] = action['say'].get(language) or action['say']['pt']
+        out['instruction'] = ('Start your reply with speak_first exactly, character-for-character, then '
+                              'summarize the rest in the same language. Watson never closes issues and '
+                              'never opens a second draft PR when a linked PR is already open.')
+    return out
 
 
 def dispatch(home, message):
@@ -240,6 +258,8 @@ def dispatch(home, message):
         store = Store(home)
         try:
             config = load_config(Path(home))
+            # Explicit language (the chat mirrors the owner) > remembered owner language > line default.
+            language = language or preferred_language(home, config)
             if name == 'watson_status':
                 # Read-only: do not take the exclusive worker lock.
                 result = _status_result(store, language)

@@ -22,7 +22,8 @@ RESULT = {'status': 'needs_info', 'summary': 'Falta confirmar a versão.',
           'voice_script': 'O autor relatou uma falha. Precisamos confirmar a versão antes de investigar.',
           'findings': [{'claim': 'Falha relatada.', 'evidence_ids': ['issue'], 'certainty': 'reported'}],
           'next_steps': ['Confirmar versão.'], 'questions_for_author': ['Qual versão?'],
-          'branch_recommendation': 'premature', 'limitations': []}
+          'branch_recommendation': 'premature', 'limitations': [],
+          'closure': {'assessment': 'not_applicable', 'pull_numbers': [], 'evidence_ids': [], 'reason': ''}}
 
 
 class FakeGitHub:
@@ -64,6 +65,25 @@ class WatsonTests(unittest.TestCase):
         self.assertTrue(second['cached'])
         self.assertEqual(first['run_id'], second['run_id'])
         self.assertEqual(self.model.calls, 2)
+
+    def test_english_run_writes_english_and_caches_per_language(self):
+        prompts = []
+
+        class Recorder(FakeModel):
+            def ask(inner, instruction, payload, schema, label):
+                prompts.append(instruction)
+                return FakeModel.ask(inner, instruction, payload, schema, label)
+
+        model = Recorder()
+        pt = triage(self.store, self.github, model, CONFIG, 7)
+        en = triage(self.store, self.github, model, CONFIG, 7, language='en')
+        self.assertNotEqual(pt['run_id'], en['run_id'])
+        self.assertIn('português brasileiro', prompts[1])
+        self.assertIn('in natural, concise English', prompts[3])
+        self.assertEqual(en['result']['language'], 'en')
+        self.assertIn('Static analysis', ' '.join(en['result']['limitations']))
+        again = triage(self.store, self.github, model, CONFIG, 7, language='en')
+        self.assertTrue(again['cached'])
 
     def test_comment_or_revision_invalidates_cache(self):
         triage(self.store, self.github, self.model, CONFIG, 7)

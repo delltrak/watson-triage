@@ -145,6 +145,15 @@ honesto e pede para conectar.
   silêncio (`NO_REPLY`) do mesmo jeito. O turno vai para o transcript
   normalmente. Qualquer outra mensagem (pedido, pergunta de status, foto,
   resposta citando outra mensagem, grupo, não-dono) segue pelo LLM + tools.
+- Investigação lê a **timeline da issue**: se um PR ligado já entregou a issue,
+  a resposta começa com uma linha fixa (`speak_first`) sugerindo fechar, ou
+  pedindo conferência quando há pendências (itens sem marcar, PR posterior que
+  também cita a issue, CI falhando, revisão pedindo mudanças). Com PR aberto, diz
+  que já existe e não abre outro. O Watson só **sugere**; nunca fecha issue.
+- **Idioma:** o Watson responde no idioma do dono. Ordem: idioma explícito da
+  chamada → último idioma detectado nas mensagens do dono (hook) → padrão da
+  linha (`config.json` `"language": "en"` ou `WATSON_LANGUAGE=en` no
+  `github-credentials`/env do container) → português.
 - `/help` na Plow responde o help do Watson (`watson/chat_help.py`, hook
   `command:help`) em vez da lista de comandos do Hermes; `/help en` em inglês.
   Outros argumentos (`/help skills`) seguem para o help do Hermes.

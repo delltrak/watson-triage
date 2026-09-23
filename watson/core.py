@@ -14,6 +14,17 @@ class WatsonError(Exception):
     pass
 
 
+def both(en, pt):
+    """Bilingual chat-facing error: the chat relays only the owner's language (persona)."""
+    return f'{en}\n\n---\n\n{pt}'
+
+
+def pick(text, language):
+    """One side of a both() text (unchanged when it is single-language)."""
+    en, sep, pt = str(text).partition('\n\n---\n\n')
+    return (en if language == 'en' else pt) if sep else str(text)
+
+
 HOME_NOT_WRITABLE = (
     'Watson home is not writable; the line owner must fix the install.\n\n'
     '---\n\n'
@@ -119,7 +130,8 @@ class Store:
             try:
                 fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
-                raise WatsonError('Outra triagem do Watson está em execução.') from None
+                raise WatsonError(both('Another Watson investigation is running; try again in a few minutes.',
+                                       'Outra triagem do Watson está em execução; tente de novo em alguns minutos.')) from None
             except (PermissionError, OSError):
                 raise WatsonError(HOME_NOT_WRITABLE) from None
             try:

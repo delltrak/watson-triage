@@ -22,7 +22,9 @@ import contextlib
 import contextvars
 import inspect
 import logging
+import os
 import re
+from pathlib import Path
 
 logger = logging.getLogger("watson.greet")
 
@@ -43,6 +45,33 @@ _WAKE_SENTINEL = re.compile(r"reply with exactly (\w+)\.?\s*$")
 # The speaker's own words for this inbound turn (Plow puts them in recall_text;
 # event.text may carry prepended roster/quote/goal blocks).
 _inbound_text = contextvars.ContextVar("watson_greet_inbound_text", default=None)
+
+
+def _watson_home() -> Path:
+    """Same home the watson MCP server uses (runtime/mcp-watson.yaml --home)."""
+    return Path(os.environ.get("HERMES_HOME", "/var/lib/hermes")) / "watson"
+
+
+def _watson_config() -> dict:
+    """Watson's config.json (line default language), or {} when unreadable."""
+    try:
+        import json
+
+        return json.loads((_watson_home() / "config.json").read_text())
+    except Exception:
+        return {}
+
+
+def _remember_owner_language(text) -> None:
+    """Owner's language for turns with no text to detect (/help, proactive pings)."""
+    try:
+        from watson.language import detect, remember_language
+
+        language = detect(text)
+        if language:
+            remember_language(_watson_home(), language)
+    except Exception:
+        logger.debug("watson-greet: could not remember owner language", exc_info=True)
 
 
 def _owner_dm(source) -> bool:
@@ -155,6 +184,7 @@ def _install() -> None:
                 if silence is not None:
                     speak, text = silence, "(plow restart wake)"
                 elif text is not None and _owner_dm(source):
+                    _remember_owner_language(text)
                     speak = await asyncio.wait_for(
                         asyncio.to_thread(greeting_reply, text), _TIMEOUT_SEC)
         except Exception:
@@ -177,12 +207,17 @@ def _install() -> None:
 
 
 def _help_decision(context):
-    """Watson /help on Plow; None keeps Hermes' own /help (other platforms, /help skills)."""
+    """Watson /help on Plow; None keeps Hermes' own /help (other platforms, /help skills).
+
+    /help alone answers in the owner's remembered language (or the line default);
+    /help en | /help pt picks one explicitly."""
     if (context or {}).get("platform") != _PLATFORM:
         return None
     from watson.chat_help import help_language, help_text
+    from watson.language import preferred_language
 
-    language = help_language((context or {}).get("args"))
+    args = str((context or {}).get("args") or "").strip()
+    language = help_language(args) if args else preferred_language(_watson_home(), _watson_config())
     if language is None:
         return None
     return {"decision": "handled", "message": help_text(language)}

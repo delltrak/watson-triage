@@ -20,6 +20,8 @@ mcp_servers:
     env:
       GH_TOKEN: ${GH_TOKEN}
       PLOW_AGENT_TOKEN: ${PLOW_AGENT_TOKEN}
+      # Line default language (e.g. en for a US line); unset stays ${...} = absent.
+      WATSON_LANGUAGE: ${WATSON_LANGUAGE}
       HOME: /var/lib/hermes
     timeout: 900
     connect_timeout: 30

@@ -1,7 +1,10 @@
 import asyncio
 import importlib.util
+import json
+import os
 import re
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -10,6 +13,7 @@ from unittest.mock import patch
 
 from watson.chat_help import help_language, help_text
 from watson.greeting import classify, greeting_reply
+from watson.language import default_language, detect, preferred_language, remember_language
 
 ROOT = Path(__file__).resolve().parents[1]
 HANDLER = ROOT / 'image' / 'hooks' / 'watson-greet' / 'handler.py'
@@ -96,6 +100,12 @@ class GreetingHookTests(unittest.TestCase):
                 return {'final_response': 'LLM reply', 'api_calls': 1}
 
         self.mixin = GatewayTurnMixin
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.hermes_home = Path(temp.name)
+        env = patch.dict(os.environ, {'HERMES_HOME': str(self.hermes_home)})
+        env.start()
+        self.addCleanup(env.stop)
         gateway = types.ModuleType('gateway')
         run_turn = types.ModuleType('gateway.run_turn')
         run_turn.GatewayTurnMixin = GatewayTurnMixin
@@ -162,6 +172,28 @@ class GreetingHookTests(unittest.TestCase):
         for text in ('Plow, not your owner: you just came online.', 'oi'):
             self.llm_calls.clear()
             self.assertEqual(self._turn(text, _source(user_id='plow_setup'))['final_response'], 'LLM reply')
+
+    def test_owner_messages_teach_the_language(self):
+        self.handler.handle('gateway:startup', {})
+        prefs = self.hermes_home / 'watson' / 'language.json'
+        self._turn('can you check issue 71 please')
+        self.assertEqual(json.loads(prefs.read_text())['language'], 'en')
+        self._turn('investiga a 71 pra mim')
+        self.assertEqual(json.loads(prefs.read_text())['language'], 'pt')
+        self._turn('https://github.com/a/b/issues/1')  # nothing to detect: keep what we know
+        self.assertEqual(json.loads(prefs.read_text())['language'], 'pt')
+        self._turn('hey there', _source(chat_type='group'))  # never from groups
+        self.assertEqual(json.loads(prefs.read_text())['language'], 'pt')
+
+    def test_help_alone_follows_the_remembered_language(self):
+        self.handler.handle('gateway:startup', {})
+        decision = self.handler.handle('command:help', {'platform': 'plow_chat', 'args': ''})
+        self.assertEqual(decision['message'], help_text('pt'))
+        self._turn('can you check issue 71 please')
+        decision = self.handler.handle('command:help', {'platform': 'plow_chat', 'args': ''})
+        self.assertEqual(decision['message'], help_text('en'))
+        decision = self.handler.handle('command:help', {'platform': 'plow_chat', 'args': 'pt'})
+        self.assertEqual(decision['message'], help_text('pt'))
 
     def test_everything_else_reaches_the_llm(self):
         self.handler.handle('gateway:startup', {})
@@ -249,6 +281,46 @@ class ChatHelpTests(unittest.TestCase):
                     speak = capabilities_report(language=lang)['speak_this']
                     self.assertNotIn('`', speak)
                     self.assertIn('/help', speak)
+
+
+class LanguageTests(unittest.TestCase):
+    def test_detect_only_when_clear(self):
+        for text, lang in (('Oi', 'pt'), ('hey', 'en'), ('investiga a 71', 'pt'),
+                           ('can you check issue 71?', 'en'), ('não abriu o PR', 'pt'),
+                           ('please investigate #12', 'en'), ('o que você acha?', 'pt')):
+            self.assertEqual(detect(text), lang, text)
+        for text in ('', '71', 'https://github.com/a/b/issues/1', 'ok', '#12', 'PR 72'):
+            self.assertIsNone(detect(text), text)
+
+    def test_one_tech_word_never_flips_the_language(self):
+        for text in ('Show', 'Show de bola', 'check na 71', 'faz o check da 71', 'close a 71', 'look na 71',
+                     'send o link', 'o squad', 'need de ajuda', 'PR open?', 'close a 62 tb'):
+            self.assertNotEqual(detect(text), 'en', text)
+        for text in ('um ok', 'um sec', "What's the status of 'Não abre o app'?", 'no, check 62',
+                     'as soon as possible', 'can you open a draft PR?'):
+            self.assertNotEqual(detect(text), 'pt', text)
+
+    def test_detection_stays_cheap_on_huge_input(self):
+        import time
+        started = time.monotonic()
+        detect('a' * 65536)
+        detect('x.com' * 20000)
+        detect('https://' + 'b' * 65536)
+        self.assertLess(time.monotonic() - started, 0.5)
+
+    def test_preferred_falls_back_to_line_default(self):
+        with tempfile.TemporaryDirectory() as folder:
+            home = Path(folder)
+            with patch.dict(os.environ, {'WATSON_LANGUAGE': ''}):
+                self.assertEqual(preferred_language(home), 'pt')
+                self.assertEqual(preferred_language(home, {'language': 'en'}), 'en')
+            with patch.dict(os.environ, {'WATSON_LANGUAGE': 'en'}):
+                self.assertEqual(default_language(), 'en')
+                self.assertEqual(preferred_language(home), 'en')
+                remember_language(home, 'pt')
+                self.assertEqual(preferred_language(home), 'pt')
+            self.assertIsNone(remember_language(home, 'klingon'))
+            self.assertEqual(oct((home / 'language.json').stat().st_mode & 0o777), '0o600')
 
 
 class RuntimeConfigTests(unittest.TestCase):
