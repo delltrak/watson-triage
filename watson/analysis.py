@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 from .core import WatsonError, digest, now, private_json
+from .labels import STATUS_LABELS, CERTAINTY_LABELS
 
 
 def object_schema(properties):
@@ -60,7 +61,6 @@ class Codex:
             command.extend(['--enable', 'skip_host_skill_discovery'])
             if self.model:
                 command.extend(['--model', self.model])
-            # Avoid passing GitHub/Plow/API credentials to the inference subprocess.
             env = {k: v for k, v in os.environ.items()
                    if k in {'PATH', 'HOME', 'CODEX_HOME', 'TMPDIR', 'LANG', 'LC_ALL',
                             'SSL_CERT_FILE', 'SSL_CERT_DIR', 'TERM'}}
@@ -90,7 +90,6 @@ class Codex:
             if any(kind not in {'reasoning', 'agent_message', 'error'} for kind in audit['item_types']):
                 raise WatsonError('O Codex tentou usar uma ferramenta; resultado descartado. Consulte o registro de uso.')
             if completed.returncode or not (root / 'answer.json').exists():
-                # Do not persist prompts or raw stderr (may include user credentials).
                 raise WatsonError('A inferência do Codex falhou. Verifique codex login status e os limites da conta.')
             try:
                 return json.loads((root / 'answer.json').read_text())
@@ -130,7 +129,6 @@ def triage(store, github, model, config, number):
     refs, limitations = github.references(issue)
     index = github.source_index(repo)
     ci = github.ci(repo, index['sha']) if hasattr(github, 'ci') else []
-    # Include head and fresh references: a new commit/merge invalidates stale evidence.
     fingerprint = digest({'version': 2, 'issue': issue, 'refs': refs, 'head': index['sha'], 'ci':ci,
                           'limitations': limitations, 'model': config.get('model')})
     previous = store.latest(repo, number)
@@ -191,15 +189,17 @@ def triage(store, github, model, config, number):
 
 
 def render(result):
-    lines = [f'# Watson · {result["repository"]} #{result["number"]}', '',
-             result['summary'], '', f'Issue: {result["issue_url"]}', '',
-             f'Estado: `{result["status"]}` · Verificado: {result["checked_at"]}', '',
-             '## Evidências', '']
+    status = STATUS_LABELS.get(result['status'], result['status'])
+    lines = [f'# Watson · issue #{result["number"]}', '',
+             result['summary'], '', f'Link: {result["issue_url"]}', '',
+             f'Situação: {status}', f'Checado em: {result["checked_at"]}', '',
+             '## O que encontrei', '']
     for finding in result['findings']:
         urls = list(dict.fromkeys(result['evidence'][key].get('url', result['issue_url'])
                                  for key in finding['evidence_ids']))
         links = ' '.join(f'[fonte {i}]({url})' for i, url in enumerate(urls, 1))
-        lines.append(f'- {finding["claim"]} ({finding["certainty"]}) {links}')
+        certainty = CERTAINTY_LABELS.get(finding['certainty'], finding['certainty'])
+        lines.append(f'- {finding["claim"]} ({certainty}) {links}')
     for heading, field in [('Próximos passos', 'next_steps'), ('Perguntas sugeridas', 'questions_for_author'),
                            ('Limites desta análise', 'limitations')]:
         if result[field]:
