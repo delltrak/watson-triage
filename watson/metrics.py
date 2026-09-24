@@ -17,7 +17,6 @@ def record_usage(home, label, model, usage):
     invocation=uuid.uuid4().hex; at=time.time()
     # Keep independent attempts rather than overwrite a run's audit file.
     private_json(folder/f'{invocation}.json',{'id':invocation,'label':label,'model':model,'usage':usage,'at':at})
-    if not model: return  # Never invent a model name for leaderboard attribution.
     conn=sqlite3.connect(folder/'state.db'); os.chmod(folder/'state.db',0o600)
     conn.execute('''CREATE TABLE IF NOT EXISTS session_model_usage(
         session_id TEXT PRIMARY KEY,model TEXT,input_tokens INTEGER,output_tokens INTEGER,
