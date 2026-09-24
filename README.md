@@ -31,7 +31,7 @@ Browser validation is configured per issue. A human supplies the trusted test en
 
 ## Install
 
-Requires Python 3.11+, GitHub CLI, and Codex CLI. Browser recording requires the optional browser dependencies. Docker is needed only for isolated repair tests.
+Requires Python 3.11+, GitHub CLI, and a Plow credential for inference — mint one with the [plow-agents CLI](https://github.com/plow-pbc/plow-agents). Browser recording requires the optional browser dependencies. Docker is needed only for isolated repair tests.
 
 ```sh
 git clone https://github.com/delltrak/watson-triage.git
@@ -40,12 +40,20 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[browser]'
 .venv/bin/python -m playwright install chromium
 gh auth login
-codex login
+plow-agents mint ln_xxx --credential-file ./plow-credentials
+set -a; . ./plow-credentials; set +a
 .venv/bin/watson --home .watson init --repo owner/repo --assignee your-login --delivery text
 .venv/bin/watson --home .watson sync
 .venv/bin/watson --home .watson track 123
 .venv/bin/watson --home .watson cycle
 ```
+
+Inference reads `PLOW_API_BASE` and `HERMES_CUSTOM_PLOW_API_KEY` (falling back
+to `PLOW_AGENT_TOKEN`) from the environment, which is what sourcing the minted
+credential above supplies — or `plow_credential_file` from the config below,
+which delivery already uses. Without one of those, the first investigation
+fails with `Sem credencial de inferência`. There is no `codex login` step:
+Codex was the inference backend until this change.
 
 The initial sync records a baseline without processing the entire backlog. Explicitly track existing issues. Later assignments are tracked automatically. `cycle` performs one bounded round; use a local supervisor/scheduler to run it periodically. The owner's pilot uses a Codex heartbeat; installation does not silently install a daemon.
 

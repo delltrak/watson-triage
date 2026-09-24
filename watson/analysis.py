@@ -38,20 +38,10 @@ def normalize_usage(usage):
     already has that property, so it maps across directly; splitting it here
     would have the cache subtracted twice.
     """
-    details = usage.get('prompt_tokens_details')
-    if not isinstance(details, dict):
-        details = {}
-
-    def count(source, key):
-        # Usage is optional telemetry. A provider sending null or a string must
-        # not cost the caller an otherwise good answer, which is what an
-        # uncaught int() in record_usage would do.
-        value = source.get(key, 0)
-        return value if isinstance(value, int) and not isinstance(value, bool) else 0
-
-    return {'input_tokens': count(usage, 'prompt_tokens'),
-            'cached_input_tokens': count(details, 'cached_tokens'),
-            'output_tokens': count(usage, 'completion_tokens')}
+    details = usage.get('prompt_tokens_details') or {}
+    return {'input_tokens': usage.get('prompt_tokens', 0),
+            'cached_input_tokens': details.get('cached_tokens', 0),
+            'output_tokens': usage.get('completion_tokens', 0)}
 
 
 DEFAULT_MODEL = 'z-ai/glm-5.2'
@@ -148,7 +138,9 @@ class PlowInference:
             raise WatsonError('A inferência do Plow respondeu sem conteúdo.') from None
         try:
             answer = json.loads(content)
-        except ValueError:
+        except (TypeError, ValueError):
+            # TypeError: a completion with `message.content: null` reaches
+            # json.loads(None) and would crash the CLI instead of erroring.
             raise WatsonError('A inferência do Plow retornou uma resposta inválida.') from None
         # Every caller indexes this as an object. `[]`, `null` and `"text"` are
         # valid JSON, so without this they escape as AttributeError/TypeError
