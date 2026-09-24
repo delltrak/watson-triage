@@ -57,9 +57,9 @@ def compose(model, issue, result, state, validation, private_channel, previous):
     return answer['language'], f'@{issue["author"]}\n\n{body}', answer.get('owner_summary',result['summary'])
 
 
-def notify(store, config, run_id, issue, result, state, validation):
-    if not config.get('notify_owner'): return None
-    p=Plow.from_config(config); chat=p.owner_chat()
+def notify(store, channel, config, run_id, issue, result, state, validation):
+    if not channel: return None
+    p, chat = channel
     labels={'waiting_access':'Aguardando acesso de teste','waiting_info':'Aguardando resposta do autor',
             'reproduced':'Problema reproduzido no teste','validated':'Cenário de teste passou',
             'blocked':'Validação bloqueada','triaged':'Triagem concluída','closed':'Issue encerrada'}
@@ -124,11 +124,33 @@ def cycle(home, *, model=None, github=None, writer=None):
                             state={'failed':'reproduced','passed':'validated'}.get(validation['status'],'blocked')
                             cases.validation(repo,number,head,validation)
                     else: state='waiting_info' if result['questions_for_author'] else 'triaged'
+                    # EVERYTHING FALLIBLE BUT SIDE-EFFECT-FREE HAPPENS BEFORE THE SAVE.
+                    #
+                    # The cursor is persisted before the sends, deliberately, so
+                    # an uncertain send is never blindly replayed. That makes the
+                    # save a point of no return: anything that can fail AFTER it
+                    # and before the send leaves the issue marked as handled with
+                    # nothing sent, and the next cycle reads the cursor as
+                    # unchanged and never looks again. One transient failure, one
+                    # update lost for good.
+                    #
+                    # So the owner-chat lookup, the comment composition and the
+                    # writer's fresh-issue preflight are all pulled up here. What
+                    # stays after the save is only claiming and sending -- the
+                    # operations whose uncertainty the checkpoint exists to
+                    # protect against.
+                    # Resolved HERE, before the save, not inside notify(). A
+                    # lookup failure used to land after cases.save(), so the
+                    # cursor was already persisted and the next cycle read the
+                    # issue as unchanged -- one transient failure dropped that
+                    # update permanently, not just once.
+                    channel=None
+                    if config.get('notify_owner'):
+                        plow=Plow.from_config(config); channel=(plow,plow.owner_chat())
                     data={'run_id':run['run_id'],'summary':result['summary'],'questions':result['questions_for_author'],
                           'validation':validation,'previous_state':previous['state'] if previous else None,
                           'author':issue['author'],'head_sha':head,'at':now()}
-                    # Persist before side effects: an uncertain send is never blindly replayed.
-                    cases.save(repo,number,cursor,state,data)
+                    pending_comment=None
                     if state in {'waiting_access','waiting_info','reproduced','validated','blocked'} and config.get('github_comments'):
                         # Don't nag repeatedly while still waiting for the same access.
                         if not(previous and previous['state']==state=='waiting_access'):
@@ -137,8 +159,20 @@ def cycle(home, *, model=None, github=None, writer=None):
                             data['language']=language; data['comment_draft']=body
                             data['summary']=owner_summary
                             result={**result,'summary':owner_summary}
-                            data['comment']=writer.comment(store,github,run['run_id'],issue,body,state)
-                    data['notification']=notify(store,config,run['run_id'],issue,result,state,validation)
+                            pending_comment=writer.prepare(github,issue,body,state)
+                    cases.save(repo,number,cursor,state,data)
+                    # Two independent channels past the checkpoint. Letting the
+                    # first failure skip the second suppressed the owner's
+                    # update for an optional GitHub comment -- and the cursor is
+                    # already saved, so nothing looks again. Both always run;
+                    # the first error is what the issue reports.
+                    failure=None
+                    if pending_comment:
+                        try: data['comment']=writer.send(store,run['run_id'],pending_comment)
+                        except Exception as exc: failure=exc
+                    try: data['notification']=notify(store,channel,config,run['run_id'],issue,result,state,validation)
+                    except Exception as exc: failure=failure or exc
+                    if failure: raise failure
                     cases.save(repo,number,cursor,state,data); store.checked(repo,number)
                     if state=='closed': store.track(repo,number,False)
                     outcome['processed'].append({'number':number,'state':state,'run_id':run['run_id'],
