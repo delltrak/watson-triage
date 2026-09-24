@@ -161,9 +161,18 @@ def cycle(home, *, model=None, github=None, writer=None):
                             result={**result,'summary':owner_summary}
                             pending_comment=writer.prepare(github,issue,body,state)
                     cases.save(repo,number,cursor,state,data)
+                    # Two independent channels past the checkpoint. Letting the
+                    # first failure skip the second suppressed the owner's
+                    # update for an optional GitHub comment -- and the cursor is
+                    # already saved, so nothing looks again. Both always run;
+                    # the first error is what the issue reports.
+                    failure=None
                     if pending_comment:
-                        data['comment']=writer.send(store,run['run_id'],pending_comment)
-                    data['notification']=notify(store,channel,config,run['run_id'],issue,result,state,validation)
+                        try: data['comment']=writer.send(store,run['run_id'],pending_comment)
+                        except Exception as exc: failure=exc
+                    try: data['notification']=notify(store,channel,config,run['run_id'],issue,result,state,validation)
+                    except Exception as exc: failure=failure or exc
+                    if failure: raise failure
                     cases.save(repo,number,cursor,state,data); store.checked(repo,number)
                     if state=='closed': store.track(repo,number,False)
                     outcome['processed'].append({'number':number,'state':state,'run_id':run['run_id'],

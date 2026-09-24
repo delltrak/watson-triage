@@ -71,6 +71,31 @@ class FlowTests(unittest.TestCase):
         self.assertIsNone(Cases(store).get('demo/repo', 7),
                           'cursor was saved despite the failed preflight — the update is now lost')
 
+    def test_a_failed_comment_still_lets_the_owner_notification_run(self):
+        # Past the checkpoint the two sends are independent: a GitHub comment
+        # is optional, the owner's update is the product. Letting the comment's
+        # failure skip notify() lost that update for good, since the cursor was
+        # already saved.
+        sent = []
+
+        class FakePlow:
+            def send(self, chat, body, media):
+                sent.append(body); return {'uid': 'receipt'}
+            def owner_chat(self): return 'chat'
+
+        writer = Mock()
+        writer.prepare.return_value = {'existing': None, 'number': 7}
+        writer.send.side_effect = WatsonError('a issue fechou entre a leitura e o post')
+
+        cfg = dict(self.cfg, github_comments=True, notify_owner=True)
+        private_json(self.home / 'config.json', cfg)
+        with patch('watson.workflow.Plow') as plow:
+            plow.from_config.return_value = FakePlow()
+            outcome = cycle(self.home, model=Model(), github=FakeGitHub(), writer=writer)
+
+        self.assertTrue(sent, 'the comment failure suppressed the owner notification')
+        self.assertTrue(outcome['errors'], 'the comment failure was swallowed')
+
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
         self.home=Path(self.tmp.name); self.gh=FakeGitHub(); self.model=Model()
