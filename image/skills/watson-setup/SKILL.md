@@ -1,6 +1,6 @@
 ---
 name: watson-setup
-description: Set up Watson — which repository to watch and which login's assigned issues to read. Trigger when the owner first messages this agent, when they ask Watson to watch a repository, or when the cycle reports that it has no configuration.
+description: Set up Watson and track issues by number — which repository to watch, which login's assigned issues to read, and which already-open issues to pick up. Trigger when the owner first messages this agent, when they ask Watson to watch a repository, when they ask it to track or look at an issue number, or when the cycle reports that it has no configuration.
 allowed-tools: Bash(/opt/hermes/.venv/bin/watson:*)
 ---
 
@@ -35,9 +35,11 @@ check — a credential you can reach is a credential that can end up in this
 conversation, and from there at the inference provider.
 
 If the owner asks whether the token works, the honest answer is that the first
-cycle will say so: an auth failure surfaces in that cycle's own error, which you
-can read and report. Until then you do not know, and saying otherwise would be
-a guess.
+cycle will say so -- and that you will not be the one who sees it. The cycle
+writes its errors to the service log, which you have no tool to read. Whoever
+started the container reads them with `docker compose logs agent`. Say that
+plainly rather than offering to check; you do not know, and saying otherwise
+would be a guess.
 
 ## 4. Initialise
 
@@ -72,5 +74,7 @@ up on their own, every ten minutes. Anything already open has to be named:
 goes and reads the issue.
 
 Then tell them they will hear from you when an issue actually moves, not on a
-schedule. If the first cycle reports an auth failure, read it back to them
-verbatim: that is the deploy-time token, fixed where the agent is started.
+schedule. If nothing arrives, an unusable token is the first thing to rule out,
+and it shows up in `docker compose logs agent` rather than here -- it is the
+deploy-time token, fixed where the agent is started, not something either of
+you can correct from this conversation.
