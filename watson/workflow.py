@@ -2,7 +2,7 @@
 import json
 import re
 from pathlib import Path
-from .analysis import Codex, object_schema, STRING, triage
+from .analysis import PlowInference, object_schema, STRING, triage
 from .browser import run_browser, credentials_path
 from .cases import Cases
 from .core import WatsonError, Store, digest, load_config, now
@@ -82,7 +82,7 @@ def notify(store, channel, config, run_id, issue, result, state, validation):
 def cycle(home, *, model=None, github=None, writer=None):
     home=Path(home).resolve(); config=load_config(home); store=Store(home)
     github=github or GitHub([config['repository']]+config.get('related_repositories',[]))
-    model=model or Codex(home,config.get('model'))
+    model=model or PlowInference.from_config(home,config)
     writer=writer or GitHubWriter(config['repository'],enabled=config.get('github_comments',False))
     cases=Cases(store); outcome={'processed':[],'unchanged':[],'errors':[]}
     try:

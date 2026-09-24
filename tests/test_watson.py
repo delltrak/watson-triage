@@ -7,7 +7,7 @@ import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
-from watson.analysis import Codex, RESULT_SCHEMA, triage, validate_result
+from watson.analysis import RESULT_SCHEMA, triage, validate_result
 from watson.cli import sync
 from watson.core import Store, WatsonError, safe_source
 from watson.delivery import Plow, deliver
@@ -116,19 +116,22 @@ class WatsonTests(unittest.TestCase):
         self.github.items = [copy.deepcopy(ISSUE)]
         self.assertEqual(sync(self.store, self.github, CONFIG)['newly_tracked'], [7])
 
+    def test_init_records_whether_the_owner_hears_about_updates(self):
+        # `notify()` returns immediately when notify_owner is absent, so an
+        # init that never wrote the key promised unattended updates and then
+        # silently dropped every one of them.
+        from watson.cli import main
+        for flag, expected in ((['--notify-owner'], True), ([], False)):
+            with tempfile.TemporaryDirectory() as folder:
+                self.assertEqual(main(['--home', folder, 'init', '--repo', 'demo/repo',
+                                       '--assignee', 'owner'] + flag), 0)
+                config = json.loads((Path(folder) / 'config.json').read_text())
+                self.assertEqual(config['notify_owner'], expected)
+
     def test_secret_and_traversal_paths_excluded(self):
         for path in ['../a.py', '/etc/config.json', '.env', 'app/.env.json', 'auth.json', 'keys/private-key.json']:
             self.assertFalse(safe_source(path), path)
         self.assertTrue(safe_source('src/calendar.tsx'))
-
-    def test_tool_activity_invalidates_inference(self):
-        def run(command, **kwargs):
-            self.assertIn('--ignore-user-config', command)
-            self.assertNotIn('GH_TOKEN', kwargs['env'])
-            return subprocess.CompletedProcess(command, 0, json.dumps({
-                'type': 'item.completed', 'item': {'type': 'command_execution'}}), '')
-        with self.assertRaisesRegex(WatsonError, 'ferramenta'):
-            Codex(self.home, run=run).ask('test', {}, RESULT_SCHEMA, 'test')
 
     def test_unknown_delivery_is_never_replayed(self):
         run = triage(self.store, self.github, self.model, CONFIG, 7)

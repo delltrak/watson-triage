@@ -39,9 +39,52 @@ def voice(script, destination, name='Luciana'):
     return str(destination)
 
 
+def credential_values(config):
+    """The `plow-agents mint` credential file, parsed as data, or {} when the
+    config names none. One owner: chat delivery and inference are the same
+    credential, and a second parser beside this one would let them disagree
+    about which token a local install is holding.
+    """
+    path = config.get('plow_credential_file')
+    if not path:
+        return {}
+    values = {}
+    for line in Path(path).read_text().splitlines():
+        if not line.strip() or line.lstrip().startswith('#'):
+            continue
+        key, separator, value = line.partition('=')
+        if not separator or key not in {'PLOW_AGENT_TOKEN', 'PLOW_API_BASE'}:
+            raise WatsonError('Arquivo de credencial Plow inválido.')
+        parts = shlex.split(value, comments=True)
+        if len(parts) != 1:
+            raise WatsonError('Valor inválido no arquivo de credencial.')
+        values[key] = parts[0]
+    if values.get('PLOW_API_BASE', 'https://api.plow.co').rstrip('/') != 'https://api.plow.co':
+        raise WatsonError('Esta versão aceita somente a API oficial do Plow.')
+    if not values.get('PLOW_AGENT_TOKEN'):
+        raise WatsonError('Credencial sem token de agente.')
+    return values
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise WatsonError('Redirecionamento recusado na entrega.')
+
+
+def post_json(method, url, data=None, headers=None, timeout=45, opener=None):
+    """The one HTTPS JSON transport: no redirects, no plaintext, parsed result.
+
+    Both callers here carry the same Plow bearer to the same host, so a second
+    copy of this would be two places for the redirect refusal and the scheme
+    check to disagree.
+    """
+    if urlparse(url).scheme != 'https':
+        raise WatsonError('O transporte exige HTTPS.')
+    send = opener or urllib.request.build_opener(NoRedirect).open
+    req = urllib.request.Request(url, data=data, headers=headers or {}, method=method)
+    with send(req, timeout=timeout) as response:
+        raw = response.read()
+        return json.loads(raw) if raw else {}
 
 
 class Plow:
@@ -55,34 +98,11 @@ class Plow:
 
     @classmethod
     def from_config(cls, config):
-        path = config.get('plow_credential_file')
-        if not path:
-            return cls()
-        values = {}
-        for line in Path(path).read_text().splitlines():
-            if not line.strip() or line.lstrip().startswith('#'):
-                continue
-            key, separator, value = line.partition('=')
-            if not separator or key not in {'PLOW_AGENT_TOKEN', 'PLOW_API_BASE'}:
-                raise WatsonError('Arquivo de credencial Plow inválido.')
-            parts = shlex.split(value, comments=True)
-            if len(parts) != 1:
-                raise WatsonError('Valor inválido no arquivo de credencial.')
-            values[key] = parts[0]
-        if values.get('PLOW_API_BASE', 'https://api.plow.co').rstrip('/') != 'https://api.plow.co':
-            raise WatsonError('Esta versão aceita somente a API oficial do Plow.')
-        if not values.get('PLOW_AGENT_TOKEN'):
-            raise WatsonError('Credencial sem token de agente.')
-        return cls(token=values['PLOW_AGENT_TOKEN'])
+        values = credential_values(config)
+        return cls(token=values['PLOW_AGENT_TOKEN']) if values else cls()
 
     def _request(self, method, url, data=None, headers=None):
-        if urlparse(url).scheme != 'https':
-            raise WatsonError('O transporte exige HTTPS.')
-        opener = urllib.request.build_opener(NoRedirect)
-        req = urllib.request.Request(url, data=data, headers=headers or {}, method=method)
-        with opener.open(req, timeout=45) as response:
-            raw = response.read()
-            return json.loads(raw) if raw else {}
+        return post_json(method, url, data, headers)
 
     def api(self, method, path, body=None):
         for attempt in range(3):

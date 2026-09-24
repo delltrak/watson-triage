@@ -1,7 +1,7 @@
-"""Measured Codex usage exported through the unmodified official Index client.
+"""Measured Plow inference usage exported through the unmodified official Index client.
 
 The compatibility table mirrors the collector's input schema; it contains only
-Watson invocation usage, not fabricated Hermes conversations or global Codex usage.
+Watson invocation usage, not fabricated Hermes conversations or unrelated usage.
 """
 import json
 import os
@@ -17,7 +17,6 @@ def record_usage(home, label, model, usage):
     invocation=uuid.uuid4().hex; at=time.time()
     # Keep independent attempts rather than overwrite a run's audit file.
     private_json(folder/f'{invocation}.json',{'id':invocation,'label':label,'model':model,'usage':usage,'at':at})
-    if not model: return  # Never invent a model name for leaderboard attribution.
     conn=sqlite3.connect(folder/'state.db'); os.chmod(folder/'state.db',0o600)
     conn.execute('''CREATE TABLE IF NOT EXISTS session_model_usage(
         session_id TEXT PRIMARY KEY,model TEXT,input_tokens INTEGER,output_tokens INTEGER,
@@ -25,7 +24,7 @@ def record_usage(home, label, model, usage):
     total=sum(max(0,int(u.get('input_tokens',0))) for u in usage)
     cached=sum(max(0,int(u.get('cached_input_tokens',0))) for u in usage)
     output=sum(max(0,int(u.get('output_tokens',0))) for u in usage)
-    # Codex input_tokens includes cached input. The Index sums these categories.
+    # input_tokens includes the cached part (see normalize_usage). The Index sums these categories.
     conn.execute('INSERT INTO session_model_usage VALUES(?,?,?,?,?,?,?,?)',
                  (invocation,model,max(0,total-cached),output,min(cached,total),0,at,at))
     conn.commit(); conn.close()
@@ -43,13 +42,13 @@ def index_client(home, *, register=False, dry_run=False):
     if not (folder/'state.db').exists():
         raise WatsonError('Ainda não há uso medido com modelo identificado para reportar.')
     token=Plow.from_config(config).token
-    # Isolate the official collector from unrelated personal Codex/Hermes histories.
+    # Isolate the official collector from unrelated personal Hermes histories.
     env={'PATH':os.environ['PATH'],'HOME':str(isolated),'HERMES_HOME':str(folder),
          'PLOW_AGENT_TOKEN':token,'AGENT_ID':agent}
     command=[sys.executable,str(Path(__file__).parent/'vendor'/'agent_index_client.py'),'--agent',agent]
     if register:
         command+=['--register','--name','Watson','--blurb','GitHub issues investigated with memory, test evidence, and iMessage updates. Never merges.',
-                  '--repo',config['agent_repository_url'],'--runtime','Codex',
+                  '--repo',config['agent_repository_url'],'--runtime','Plow',
                   '--install-url',config.get('agent_install_url',config['agent_repository_url']+'/blob/main/README.md')]
     elif dry_run: command+=['--dry-run']
     result=subprocess.run(command,env=env,capture_output=True,text=True,timeout=120)
