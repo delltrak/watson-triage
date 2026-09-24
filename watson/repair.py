@@ -5,7 +5,7 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from .analysis import Codex, object_schema, STRING
+from .analysis import PlowInference, object_schema, STRING
 from .cases import Cases
 from .core import Store, WatsonError, load_config, digest, private_json, safe_source
 from .github import GitHub
@@ -33,7 +33,7 @@ def repair(home, number):
             if not allowed or len(allowed)>12 or any(not safe_source(p) for p in allowed):
                 raise WatsonError('Lista de arquivos autorizados inválida.')
             files={p:gh.file(repo,p,sha)['content'] for p in allowed}
-            model=Codex(home,config.get('model'))
+            model=PlowInference.from_config(home,config)
             proposal=model.ask('Propose the smallest source fix and a meaningful regression test for the reproduced bug. '
                 'Return complete file contents without line-number prefixes. Change only allowed files. '
                 'Never change authentication, dependencies, workflows, credentials, or unrelated code. '
