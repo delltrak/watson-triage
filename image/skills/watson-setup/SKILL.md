@@ -6,6 +6,12 @@ allowed-tools: Bash(/opt/hermes/.venv/bin/watson:*)
 
 # Watson setup
 
+**Tracking an issue is not setup.** If the owner names an issue number and this
+install is already configured, run `track` (section 5) and stop — do not ask for
+a repository or an assignee, and do not run `init`, which refuses a second time
+and would end the exchange on an error instead of the thing they asked for.
+Sections 1, 2 and 4 are for an install that has no configuration yet.
+
 Two facts make Watson work, and the owner supplies both. Ask one at a time.
 
 **Never ask the owner for a GitHub token, and refuse if they offer one.** A
