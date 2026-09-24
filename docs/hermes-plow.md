@@ -46,9 +46,12 @@ mcp_servers:
     connect_timeout: 30
 ```
 
-O processo da ponte deve encontrar `gh` autenticado e uma credencial Plow para inferência (`PLOW_API_BASE` + `HERMES_CUSTOM_PLOW_API_KEY`, ou `plow_credential_file` no config). Não há mais `codex login`. Esse exemplo não
-foi carregado em um gateway Hermes real. Não copiar o ambiente pessoal inteiro
-ou credenciais de escrita para dentro de uma imagem pública.
+O processo da ponte deve encontrar `gh` autenticado e uma credencial Plow para
+inferência -- `PLOW_API_BASE` e `HERMES_CUSTOM_PLOW_API_KEY` no ambiente, ou
+`plow_credential_file` no config, que é o que `PlowInference.from_config` lê.
+Não há mais `codex login`: o Codex deixou de ser o backend de inferência. Esse
+exemplo não foi carregado em um gateway Hermes real. Não copiar o ambiente
+pessoal inteiro ou credenciais de escrita para dentro de uma imagem pública.
 
 ## Estado do piloto
 

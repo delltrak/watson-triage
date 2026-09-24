@@ -1,0 +1,127 @@
+#!/command/with-contenv sh
+# One Watson cycle every ten minutes, from boot.
+#
+# A supervised loop rather than a timer: this image is supervised by s6, and
+# that is the shape a periodic job takes under it. Ten minutes because an issue
+# assignment is not urgent and each pass costs a GitHub read per tracked issue;
+# `cycle` is resumable and skips an issue whose event cursor has not moved, so a
+# late or missed tick costs nothing.
+
+# Absolute, because a service inherits the supervision tree's PATH and not a
+# login shell's -- `gh` resolving at all would otherwise be a property of the
+# init's configuration rather than of this file.
+PATH=/command:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
+export PATH
+
+WATSON_HOME=/var/lib/hermes/watson
+STASH=/opt/plow/watson-github
+
+# The token is read here, as root, from a file mounted read-only at $STASH --
+# never from the container environment, and never from a file the agent writes.
+#
+# All three of those are load-bearing, and each closed a different path the
+# credential took into model context. An agent-written file sourced here was
+# arbitrary root execution one prompt injection away. A token the agent had to
+# be TOLD, in order to write that file, was disclosed to the inference provider
+# the moment it was said. And a token in the container environment is one
+# `printenv` from the gateway's shell, which shares this container -- which is
+# why it is mounted rather than passed through `env_file`: it never enters that
+# environment at all, so nothing has to remember to remove it.
+#
+# Residual, named here and in issue #2: the child below runs as `hermes`, the
+# gateway's own uid, so its /proc entry is readable while a pass runs.
+cycle() {
+  /command/s6-setuidgid hermes env -i \
+    PATH="$PATH" HOME=/var/lib/hermes \
+    PLOW_API_BASE="$PLOW_API_BASE" \
+    PLOW_AGENT_TOKEN="$PLOW_AGENT_TOKEN" \
+    HERMES_CUSTOM_PLOW_API_KEY="$HERMES_CUSTOM_PLOW_API_KEY" \
+    GH_TOKEN="$GH_TOKEN" \
+    ${TZ:+TZ="$TZ"} \
+    /opt/hermes/.venv/bin/watson --home "$WATSON_HOME" cycle
+}
+
+# On shutdown, stop starting NEW passes -- do NOT kill a running one.
+#
+# `cycle` commits the case cursor before delivering, deliberately, so an
+# uncertain send is never blindly replayed. Killing the child mid-pass can
+# therefore land between that commit and the send, and the next cycle reads the
+# cursor as unchanged and never retries: one routine `compose stop` silently
+# eats an issue update. That is the exact loss the checkpoint ordering exists
+# to prevent, so the trap must not introduce it.
+#
+# An in-flight pass is left to finish or to be stopped by the container's own
+# grace period, where a killed send is recorded `unknown` rather than lost.
+# `exit 0` is deferred until the foreground child returns, which is exactly
+# that: immediate while idle, after the pass while one is running.
+trap 'exit 0' TERM INT
+
+while :; do
+  # Tested by doing, not by reading the mode. A bind mount's permissions are
+  # the HOST's, and two ordinary situations hand the token to the agent with
+  # `stat` still reporting root:root 0600:
+  #
+  #   - Docker Desktop on macOS does not enforce the mode at all;
+  #   - a Linux host whose operator uid happens to be 10000 maps the file onto
+  #     `hermes` itself, where 0600 is exactly the wrong owner.
+  #
+  # The second is a real deployment, not a developer's laptop, which is why
+  # this refuses rather than warns: the cycle's whole job is reading issue text
+  # written by strangers, and running it means doing that with a repository
+  # credential the model can read. Nothing here is worth that.
+  if [ -f "$STASH" ] && /command/s6-setuidgid hermes test -r "$STASH"; then
+    echo "watson-cycle: REFUSING to run -- the agent's own uid can read $STASH," >&2
+    echo "so a prompt injection could read the GitHub token. The file must be" >&2
+    echo "root-owned on the HOST -- see \"Give it a GitHub token\" in" >&2
+    echo "docs/INSTALL.md. On Docker Desktop for macOS there is no fix: it does" >&2
+    echo "not enforce mounted file modes at all, so run on a Linux host." >&2
+    /bin/sleep 600 & wait $! || true
+    continue
+  fi
+
+  GH_TOKEN=$(cat "$STASH" 2>/dev/null || true)
+  if [ -z "$GH_TOKEN" ]; then
+    # Stand down rather than guess -- and say the thing the operator has to
+    # DO. This message is the recovery path, so it names the current
+    # mechanism: a raw-token file mounted at $STASH, not an environment
+    # variable. The hosted path waits on issue #2.
+    # No commands here. This message is read by whoever is looking at the
+    # logs, which is not always the operator, and a recipe containing a
+    # credential is one somebody pastes with the token inline -- into their
+    # shell history, or into a ticket. It points at the doc instead, and it
+    # distinguishes the two ways to arrive here, because the fixes differ.
+    echo "watson-cycle: no GitHub token at $STASH -- standing down." >&2
+    if [ -n "$AGENT_ID" ] && [ ! -e "$STASH" ]; then
+      echo "Hosted deploy: it injects only the PLOW_* variables, so there is no" >&2
+      echo "hook for this credential yet. Nothing to fix here -- run under compose." >&2
+    else
+      echo "Local compose: provision it per \"Give it a GitHub token\"." >&2
+    fi
+    /bin/sleep 600 & wait $! || true
+    continue
+  fi
+
+  if [ ! -f "$WATSON_HOME/config.json" ]; then
+    # Not an error: a fresh agent has not been through watson-setup yet, and
+    # there is nothing here to poll for -- the owner finishes it in chat.
+    echo "watson-cycle: not configured yet; the owner runs watson-setup in chat" >&2
+    /bin/sleep 600 & wait $! || true
+    continue
+  fi
+
+  # The pass's JSON goes to the log, not /dev/null. `cycle` catches per-issue
+  # failures and returns them in that JSON rather than raising, so discarding
+  # it left the only record of what broke nowhere -- and the stderr line below
+  # pointed at a journal that then held nothing.
+  #
+  # Never fatal. `cycle` exits 1 when any single tracked issue errored, which
+  # is an ordinary outcome: one unreadable issue must not respawn this service,
+  # and a crashing longrun is respawned in a tight loop.
+  cycle || echo "watson-cycle: pass reported errors; see its JSON above" >&2
+  # Backgrounded and waited, not a plain `sleep`: a trap does not interrupt a
+  # foreground child, so a plain sleep would run its full 600s after SIGTERM
+  # and shutdown would stall until the grace period SIGKILLed us -- mid-pass,
+  # which is the window this whole trap exists to close. `wait` returns as soon
+  # as the handler runs.
+  /bin/sleep 600 & wait $! || true
+done
