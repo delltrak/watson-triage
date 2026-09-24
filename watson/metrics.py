@@ -1,4 +1,4 @@
-"""Measured inference usage exported through the unmodified official Index client.
+"""Measured Plow inference usage exported through the unmodified official Index client.
 
 The compatibility table mirrors the collector's input schema; it contains only
 Watson invocation usage, not fabricated Hermes conversations or unrelated usage.
@@ -49,7 +49,7 @@ def index_client(home, *, register=False, dry_run=False):
     command=[sys.executable,str(Path(__file__).parent/'vendor'/'agent_index_client.py'),'--agent',agent]
     if register:
         command+=['--register','--name','Watson','--blurb','GitHub issues investigated with memory, test evidence, and iMessage updates. Never merges.',
-                  '--repo',config['agent_repository_url'],'--runtime','Hermes',
+                  '--repo',config['agent_repository_url'],'--runtime','Plow',
                   '--install-url',config.get('agent_install_url',config['agent_repository_url']+'/blob/main/README.md')]
     elif dry_run: command+=['--dry-run']
     result=subprocess.run(command,env=env,capture_output=True,text=True,timeout=120)
