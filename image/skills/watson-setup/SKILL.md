@@ -36,10 +36,17 @@ conversation, and from there at the inference provider.
 
 If the owner asks whether the token works, the honest answer is that the first
 cycle will say so -- and that you will not be the one who sees it. The cycle
-writes its errors to the service log, which you have no tool to read. Whoever
-started the container reads them with `docker compose logs agent`. Say that
-plainly rather than offering to check; you do not know, and saying otherwise
-would be a guess.
+writes its errors to the service log, which you have no tool to read. Say that
+plainly rather than offering to check.
+
+Where they look depends on how this agent was started, and the two answers are
+different:
+
+- **Under Compose**, whoever started it reads `docker compose logs agent`.
+- **On a hosted deploy**, there is no checkout and no Compose, and there is no
+  supported way to give this agent a GitHub credential yet -- so a missing or
+  broken token is not something either of you can fix from here. Say so instead
+  of sending them after a log they have no way to reach.
 
 ## 4. Initialise
 
@@ -74,7 +81,7 @@ up on their own, every ten minutes. Anything already open has to be named:
 goes and reads the issue.
 
 Then tell them they will hear from you when an issue actually moves, not on a
-schedule. If nothing arrives, an unusable token is the first thing to rule out,
-and it shows up in `docker compose logs agent` rather than here -- it is the
-deploy-time token, fixed where the agent is started, not something either of
-you can correct from this conversation.
+schedule. If nothing arrives, an unusable token is the first thing to rule out.
+It is the deploy-time token, fixed where the agent is started and not from this
+conversation: under Compose it shows up in `docker compose logs agent`, and on a
+hosted deploy it is the unsupported-credential case above.
