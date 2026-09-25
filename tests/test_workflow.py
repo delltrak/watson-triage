@@ -40,7 +40,7 @@ class FlowTests(unittest.TestCase):
         validation = {'status': 'failed', 'video': '/tmp/none.mp4',
                       'steps': [{'status': 'failed', 'expected': 'ok', 'actual': 'boom'}]}
         result = {'summary': 'resumo'}
-        receipt = notify(store, (FakePlow(), 'chat'), {'notify_owner': True},
+        receipt = notify(store, (FakePlow(), 'chat'), {'notify_owner': True, 'language': 'pt'},
                          1, ISSUE, result, 'reproduced', validation)
         self.assertIsNotNone(receipt)
         chat, body, media = sent[0]
@@ -93,7 +93,9 @@ class FlowTests(unittest.TestCase):
             plow.from_config.return_value = FakePlow()
             outcome = cycle(self.home, model=Model(), github=FakeGitHub(), writer=writer)
 
-        self.assertTrue(sent, 'the comment failure suppressed the owner notification')
+        # The issue's own update: the setup confirmation reaches the same chat.
+        self.assertTrue([b for b in sent if b.startswith('Watson · #7')],
+                        'the comment failure suppressed the owner notification')
         self.assertTrue(outcome['errors'], 'the comment failure was swallowed')
 
     def setUp(self):

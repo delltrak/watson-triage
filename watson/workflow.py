@@ -5,9 +5,11 @@ from pathlib import Path
 from .analysis import PlowInference, object_schema, STRING, triage
 from .browser import run_browser, credentials_path
 from .cases import Cases
-from .core import WatsonError, Store, digest, load_config, now
+from .core import LANGUAGE_NAMES, WatsonError, Store, digest, load_config, now, owner_language, private_json, repo_name
+from .core import login as valid_login
 from .delivery import Plow
 from .github import GitHub
+from .githubapp import read_status
 from .writes import GitHubWriter, MARKER
 from .captions import narrate
 
@@ -35,7 +37,7 @@ def event_cursor(issue, head, access_revision, ci, profile=None):
     return digest({'issue':external,'head':head,'access_revision':access_revision,'ci':ci,'profile':profile})
 
 
-def compose(model, issue, result, state, validation, private_channel, previous):
+def compose(model, issue, result, state, validation, private_channel, previous, language):
     payload={'issue':issue,'triage':result,'state':state,'validation':validation,
              'private_access_channel':private_channel,'previous_case':previous}
     answer=model.ask('Write a short GitHub issue comment in the predominant language of the issue. '
@@ -47,7 +49,7 @@ def compose(model, issue, result, state, validation, private_channel, previous):
         'If blocked, explain validation could not be completed. Do not invent links, attachments, '
         'deployments, fixes or tests. Do not include mentions; the caller adds the verified issue author. '
         'Do not repeat a question already answered. Never request production passwords. '
-        'Also write owner_summary in Brazilian Portuguese describing the CURRENT workflow state and '
+        f'Also write owner_summary in {LANGUAGE_NAMES[language]} describing the CURRENT workflow state and '
         'actual validation result, replacing any stale static-analysis limitations about not running tests.',
         payload,COMMENT_SCHEMA,f'comment-{issue["number"]}-{digest(payload)[:10]}')
     body=answer.get('body','').strip()
@@ -57,19 +59,70 @@ def compose(model, issue, result, state, validation, private_channel, previous):
     return answer['language'], f'@{issue["author"]}\n\n{body}', answer.get('owner_summary',result['summary'])
 
 
+# What the cycle tells the owner on its own, in their language. Beyond an issue
+# update's summary, only this text and validated values (repository, login,
+# numbers, the app's install link) go out this way, never exception text: the
+# chat explains details from `watson status`.
+NOTICE={
+    'en':{'waiting_access':'Waiting for test access','waiting_info':'Waiting for the author to reply',
+          'reproduced':'Problem reproduced in the test','validated':'Test scenario passed',
+          'blocked':'Validation blocked','triaged':'Triage done','closed':'Issue closed',
+          'expected':'Expected','observed':'Observed',
+          'stuck':'Watson: I could not check {numbers} twice in a row, so I will try again less often. '
+                  'Ask me what went wrong, or tell me to stop tracking {numbers}.',
+          'set_up':'Watson is set up: watching {repo} for issues assigned to {assignee}. Open now: {count}. '
+                   'An issue already open I look at when you send its number; issues assigned from now on I pick up on my own.',
+          'no_issues':'\n\nIf {assignee} is not the right GitHub login, tell me the right one.',
+          'connected_list':'Watson: GitHub is connected as {login}. Which repository should I watch? Reply with its number:'
+                           '{repos}\n\nOr send me owner/repo if it is not here.',
+          'connected_one':'Watson: GitHub is connected as {login}, and Watson Triage can read {repo}. Shall I watch it?',
+          'connected_none':'Watson: GitHub is connected as {login}. Now install Watson Triage on the repository I should '
+                           'watch:\n\n{url}\n\nTell me when you have installed it.',
+          'reconnected':'Watson: GitHub is reconnected as {login}.',
+          'refused':{401:"GitHub refused Watson's access to {repo}; it expired or was revoked. Reply and I will reconnect it. "
+                         'Until then I am not checking issues.',
+                     403:'GitHub denied access to {repo} (permission or rate limit). Until then I am not checking issues.',
+                     404:'GitHub cannot find {repo}, or Watson cannot see it; a private repository needs the Watson Triage '
+                         'app installed. Reply and I will help. Until then I am not checking issues.',
+                     422:'GitHub says {assignee} is not a valid login; tell me the right one. Until then I am not checking issues.'}},
+    'pt':{'waiting_access':'Aguardando acesso de teste','waiting_info':'Aguardando resposta do autor',
+          'reproduced':'Problema reproduzido no teste','validated':'Cenário de teste passou',
+          'blocked':'Validação bloqueada','triaged':'Triagem concluída','closed':'Issue encerrada',
+          'expected':'Esperado','observed':'Observado',
+          'stuck':'Watson: não consegui verificar {numbers} duas vezes seguidas, então vou tentar de novo com menos frequência. '
+                  'Me pergunte o que deu errado, ou peça para eu parar de acompanhar {numbers}.',
+          'set_up':'Watson configurado: acompanho {repo}, issues atribuídas a {assignee}. Abertas agora: {count}. '
+                   'Uma issue já aberta eu vejo quando você me mandar o número; as atribuídas daqui em diante eu pego sozinho.',
+          'no_issues':'\n\nSe {assignee} não for o login certo no GitHub, me diga o certo.',
+          'connected_list':'Watson: GitHub conectado como {login}. Qual repositório devo acompanhar? Responda com o número:'
+                           '{repos}\n\nOu me mande dono/repo se não estiver aqui.',
+          'connected_one':'Watson: GitHub conectado como {login}, e o Watson Triage consegue ler {repo}. Acompanho esse?',
+          'connected_none':'Watson: GitHub conectado como {login}. Agora instale o Watson Triage no repositório que devo '
+                           'acompanhar:\n\n{url}\n\nMe avise quando tiver instalado.',
+          'reconnected':'Watson: GitHub reconectado como {login}.',
+          'refused':{401:'O GitHub recusou o acesso do Watson a {repo}; ele expirou ou foi revogado. Responda e eu reconecto. '
+                         'Até lá não verifico issues.',
+                     403:'O GitHub negou acesso a {repo} (permissão ou limite de uso). Até lá não verifico issues.',
+                     404:'O GitHub não encontra {repo}, ou o Watson não consegue vê-lo; um repositório privado precisa do app '
+                         'Watson Triage instalado. Responda e eu ajudo. Até lá não verifico issues.',
+                     422:'O GitHub diz que {assignee} não é um login válido; me diga o certo. Até lá não verifico issues.'}}}
+
+
 def notify(store, channel, config, run_id, issue, result, state, validation):
     if not channel: return None
-    p, chat = channel
-    labels={'waiting_access':'Aguardando acesso de teste','waiting_info':'Aguardando resposta do autor',
-            'reproduced':'Problema reproduzido no teste','validated':'Cenário de teste passou',
-            'blocked':'Validação bloqueada','triaged':'Triagem concluída','closed':'Issue encerrada'}
-    body=f'Watson · #{issue["number"]}\n\n{labels[state]}\n\n{result["summary"]}\n\n{issue["url"]}'
+    words=NOTICE[owner_language(config)]
+    body=f'Watson · #{issue["number"]}\n\n{words[state]}\n\n{result["summary"]}\n\n{issue["url"]}'
     if validation:
         failed=next((s for s in validation['steps'] if s.get('status')=='failed'),None)
-        if failed: body+=f'\n\nEsperado: {failed["expected"]}\nObservado: {failed["actual"]}'
+        if failed: body+=f'\n\n{words["expected"]}: {failed["expected"]}\n{words["observed"]}: {failed["actual"]}'
     media=validation.get('video') if validation and config.get('send_video') else None
     if media and Path(media).suffix!='.mp4': media=None
-    key=store.claim_action(run_id,'owner_workflow_notice',{'state':state,'body':body,'media':media})
+    return send_owner(store,channel,run_id,'owner_workflow_notice',{'state':state,'body':body,'media':media},body,media)
+
+
+def send_owner(store, channel, run_id, kind, payload, body, media=None):
+    p, chat = channel
+    key=store.claim_action(run_id,kind,payload)
     try:
         receipt=p.send(chat,body,media)
         store.action_result(key,'accepted',receipt)
@@ -79,24 +132,83 @@ def notify(store, channel, config, run_id, issue, result, state, validation):
         raise WatsonError('Notificação não confirmada; sem repetição automática.') from None
 
 
+def tell_owner(store, config, kind, payload, body):
+    # Never fatal to the pass. The claim sends a payload once; a Plow that
+    # cannot be reached claims nothing. One already claimed costs no Plow
+    # call, which a notice checked every pass would otherwise pay each time.
+    if not config.get('notify_owner') or store.claimed(None,kind,payload): return None
+    try:
+        plow=Plow.from_config(config)
+        return send_owner(store,(plow,plow.owner_chat()),None,kind,payload,body)
+    except Exception: return None
+
+
+def announce(home):
+    """Tell the owner GitHub is connected as soon as root says so, once per
+    connection. Before setup too, with no notify_owner to ask yet: the owner is
+    in the chat setting it up. The agent sends it; root never writes here."""
+    github=read_status()
+    if github.get('state')!='connected' or not github.get('connected_at'): return None
+    home=Path(home).resolve(); configured=(home/'config.json').exists()
+    config=load_config(home) if configured else {'notify_owner':True}
+    chosen=home/'connect.json'  # the language the chat connected in, until init saves one
+    words=NOTICE[owner_language({**(json.loads(chosen.read_text()) if chosen.exists() else {}),**config})]
+    login=valid_login(github['login']); repos=[repo_name(r['full_name']) for r in github.get('repositories',[])]
+    # No list at all is GitHub not giving one, not nothing installed: root asks again next tick.
+    if not configured and 'repositories' not in github: return None
+    if configured: body=words['reconnected'].format(login=login)
+    elif len(repos)==1: body=words['connected_one'].format(login=login,repo=repos[0])
+    elif repos: body=words['connected_list'].format(login=login,repos=''.join(f'\n\n**{n}. {r}**' for n,r in enumerate(repos,1)))
+    else: body=words['connected_none'].format(login=login,url=github['install_url'])
+    store=Store(home)
+    try: return tell_owner(store,config,'owner_github_notice',{'login':login,'connected_at':github['connected_at']},body)
+    finally: store.db.close()
+
+
 def cycle(home, *, model=None, github=None, writer=None):
     home=Path(home).resolve(); config=load_config(home); store=Store(home)
     github=github or GitHub([config['repository']]+config.get('related_repositories',[]))
     model=model or PlowInference.from_config(home,config)
     writer=writer or GitHubWriter(config['repository'],enabled=config.get('github_comments',False))
-    cases=Cases(store); outcome={'processed':[],'unchanged':[],'errors':[]}
+    cases=Cases(store); outcome={'processed':[],'unchanged':[],'skipped':[],'errors':[]}
+    repo=config['repository']; login=config['assignee']; stuck=[]; notice=NOTICE[owner_language(config)]
     try:
         with store.lock():
-            from .cli import sync
-            outcome['sync']=sync(store,github,config)
-            tracked=store.db.execute('SELECT number FROM issues WHERE repo=? AND tracked=1 ORDER BY COALESCE(checked,\'\'),number',
-                                    (config['repository'],)).fetchall()
+            from .cli import last_sync, sync
+            try: outcome['sync']=sync(store,github,config)
+            except Exception as exc:
+                # Every issue would fail the same way, so none is read. A refusal
+                # is told once per stretch since the last good sync; a 5xx or a
+                # timeout passes by itself and is not worth a message, and nor is
+                # the 401 after the owner disconnected GitHub, until they connect again.
+                outcome['errors'].append({'sync':str(exc)[:500]}); tracked=[]
+                status=getattr(exc,'status',None)
+                if status in notice['refused'] and not read_status().get('by_owner'):
+                    tell_owner(store,config,'owner_sync_notice',
+                               {'repo':repo,'assignee':login,'status':status,'since':last_sync(home).get('at')},
+                               notice['refused'][status].format(repo=repo,assignee=login))
+            else:
+                if outcome['sync']['initial_baseline']:
+                    count=outcome['sync']['assigned_open']
+                    tell_owner(store,config,'owner_setup_notice',{'repo':repo,'assignee':login},
+                               notice['set_up'].format(repo=repo,assignee=login,count=count)
+                               +('' if count else notice['no_issues'].format(assignee=login)))
+                # A failing issue waits out its backoff, then queues by when it
+                # became due, so it can neither hold every slot nor starve.
+                tracked=store.db.execute('''SELECT number,explicit,checked FROM issues WHERE repo=? AND tracked=1
+                    AND COALESCE(retry_at,'')<=? ORDER BY COALESCE(retry_at,checked,''),number''',(repo,now())).fetchall()
             for row in tracked[:config.get('cycle_limit',3)]:
-                number=row['number']; repo=config['repository']
+                number=row['number']
                 try:
                     issue=github.issue(repo,number)
-                    if config['assignee'] not in issue['assignees']:
-                        store.track(repo,number,False); continue
+                    # Read again: the selection is minutes old, and the owner's
+                    # track or untrack does not wait for the pass.
+                    row=store.db.execute('SELECT tracked,explicit,checked FROM issues WHERE repo=? AND number=?',
+                                         (repo,number)).fetchone()
+                    if not row['tracked']: continue
+                    if not row['explicit'] and login not in issue['assignees']:
+                        store.track(repo,number,False)
+                        outcome['skipped'].append({'number':number,'reason':f'no longer assigned to {login}'}); continue
                     head=github.source_index(repo)['sha']
                     ci=github.ci(repo,head) if hasattr(github,'ci') else []
                     previous=cases.get(repo,number)
@@ -155,7 +267,8 @@ def cycle(home, *, model=None, github=None, writer=None):
                         # Don't nag repeatedly while still waiting for the same access.
                         if not(previous and previous['state']==state=='waiting_access'):
                             language,body,owner_summary=compose(model,issue,result,state,validation,
-                                 config.get('private_access_channel','the repository owner through your agreed private channel'),previous)
+                                 config.get('private_access_channel','the repository owner through your agreed private channel'),previous,
+                                 owner_language(config))
                             data['language']=language; data['comment_draft']=body
                             data['summary']=owner_summary
                             result={**result,'summary':owner_summary}
@@ -178,6 +291,15 @@ def cycle(home, *, model=None, github=None, writer=None):
                     outcome['processed'].append({'number':number,'state':state,'run_id':run['run_id'],
                                                 'comment':data.get('comment'),'notification':data.get('notification')})
                 except Exception as exc:
-                    outcome['errors'].append({'number':number,'error':str(exc)[:500]})
+                    error=str(exc)[:500]; outcome['errors'].append({'number':number,'error':error})
+                    # Told once per streak, on the second failure in a row; the
+                    # last success in the key tells one streak from the next.
+                    if store.failed(repo,number,error)==2: stuck.append([number,row['checked']])
+            if stuck:
+                tell_owner(store,config,'owner_stuck_notice',{'repo':repo,'stuck':stuck},
+                           notice['stuck'].format(numbers=', '.join(f'#{n}' for n,_ in stuck)))
     finally: store.db.close()
+    # The chat's view of the last pass (`watson status`): the JSON the service
+    # log gets, token-free.
+    private_json(home/'last-cycle.json',{'at':now(),**outcome})
     return outcome
