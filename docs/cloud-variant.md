@@ -23,32 +23,62 @@ out of `~/.codex/auth.json`. The container configures no `browser_profiles`, so
 `voice` and `deliver --audio` are explicit commands. Run Watson on your Mac when
 you want the recorded evidence.
 
-**The owner's GitHub token never enters the container's long-lived environment.**
-[docs/INSTALL.md](INSTALL.md#1-give-it-a-github-token--at-deploy-time-not-in-chat)
-owns the operator contract. The mechanism is a read-only bind mount: the raw
-token sits at `/opt/plow/watson-github`, owned `root:root 0600`, and the cycle
-service reads it as root before dropping privileges. Nothing puts it in the environment s6 publishes, so nothing has to remember to
-take it out — the gateway shares this container and has a shell, and anything
-there is one `printenv` from the model. It does reach one environment: the
-cycle's own child, for as long as a pass runs, which is the residual below.
+**The owner connects GitHub in chat, and the agent never holds the tokens.**
+[docs/INSTALL.md](INSTALL.md#1-connect-github-in-chat) owns the owner's side.
+The mechanism is the Watson Triage GitHub App's device flow, split by uid:
 
-A bind mount's permissions are the **host's**, so the cycle does not trust the
-reported mode: every pass tries to read the file as uid 10000 and **refuses to
-run** if that succeeds. Two ordinary setups trip it — Docker Desktop on macOS,
-which does not enforce mounted modes at all, and a Linux host whose own uid is
-10000, where `0600` lands on `hermes` itself.
+- The chat, as the agent, runs `watson github connect`. That only creates an
+  empty request file in the agent's home, which root `lstat`s and unlinks but
+  never opens, and reads the answer from `/run/watson-github/status.json`,
+  which root writes and the agent can only read: a state, the login, the
+  install URL, and the user code and verification URI while one is pending.
+- Root's half, `python3 -I -m watson.githubapp`, runs inside the `watson-cycle`
+  service, between passes. It asks GitHub for a device code, polls while the
+  owner approves it, and keeps the access and refresh tokens in
+  `/var/lib/watson-github/token.json`, `0600` in a root `0700` directory the
+  agent cannot enter. The device code and the refresh token never leave it.
+  The image builds in the app's public client id; there is no client secret.
+- The access token lasts eight hours. Root refreshes it between passes once
+  less than two hours are left -- never under a pass, since a refresh retires
+  the old pair at once -- and hands each pass the access token alone, as
+  `GH_TOKEN`. Nothing puts it in the environment s6 publishes: the gateway
+  shares this container and has a shell, and anything there is one `printenv`
+  from the model.
+
+The service tests the store by doing, not by reading its mode: if the agent's
+uid can enter `/var/lib/watson-github` -- a host directory mounted over it, say,
+and Docker Desktop on macOS enforces no mode there -- it refuses to run, before
+anything is written there. Compose keeps the store in a named volume, which
+takes the image's `root 0700` on first mount, macOS included.
 
 The pass runs with `HOME` set to an empty directory root owns, not the agent's
 home. `gh` reads its config from `$HOME/.config/gh`, and a config the agent
 wrote there (an `http_unix_socket`) would hand the token to a socket the agent
 listens on, every pass.
 
-The residual this page will not overstate away: the cycle hands the token to a
-child running as `hermes`, the gateway's own uid, so `/proc/<pid>/environ` is
-readable for as long as a pass runs -- minutes when an issue changed, since
-triaging it waits on inference. Closing that needs a separate uid for the
-cycle, which moves `watson init` out of chat setup and into the service -- a
-product change rather than a hardening pass.
+The residuals this page will not overstate away:
+
+- The pass runs as `hermes`, the gateway's own uid, so its `/proc/<pid>/environ`
+  -- `GH_TOKEN` with it -- is readable for as long as a pass runs: minutes when
+  an issue changed, since triaging it waits on inference. What that exposes is
+  the access token alone: read-only, good for up to eight hours, on what both
+  the owner and the app can reach. Closing it needs a separate uid for the
+  cycle (srosro/watson-triage#4), which moves `watson init` out of chat setup
+  and into the service -- a product change rather than a hardening pass.
+- Device-code phishing. The chat cannot read the tokens, but a prompt-injected
+  chat can start a device flow of its own -- with the same public client id, or
+  with `gh auth login` and gh's own OAuth app, which asks for write scopes --
+  and ask the owner to type the code; the token then lands in the model's
+  context. Nothing here closes that in code, since `gh` and `curl` are in the
+  image for the cycle's own use. The owner does: a code is approved only right
+  after asking Watson to connect, and only for Watson Triage asking for
+  read-only access. The skill and INSTALL.md both say so.
+
+Two things on the hosted path are not verified yet: that its `PLOW_API_BASE` is
+`https`, which every Plow call here requires, and that `/var/lib/watson-github`
+survives a `plow-agents deploy` of a new image. If it does not, the owner
+connects again after an update; the store does not move into the agent's home
+to avoid that.
 
 Shutdown is not clean yet either (srosro/watson-triage#9). On SIGTERM the
 service starts no new pass, but the running one is never told to stop: it keeps

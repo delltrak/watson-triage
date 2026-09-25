@@ -8,9 +8,9 @@ Built by [Deltrak](https://github.com/delltrak).
 
 **Your assigned GitHub issues arrive investigated.**
 
-Watson reads an issue, its conversation, relevant source files and GitHub Actions results. It remembers earlier investigations, asks the author for missing information in the issue's language, and resumes when they reply. Owner updates are in Brazilian Portuguese over Plow/iMessage.
+Watson reads an issue, its conversation, relevant source files and GitHub Actions results. It remembers earlier investigations, asks the author for missing information in the issue's language, and resumes when they reply. Owner updates go over Plow/iMessage in the owner's language, English or Brazilian Portuguese.
 
-This is a prototype. It never merges PRs. It runs two ways: locally on your own Mac, where browser validation and audio also work, or as a Plow cloud agent you text — under Docker Compose today, since the hosted deploy path cannot yet supply a GitHub credential. Both think through Plow's inference, so no local Codex or ChatGPT session is needed.
+This is a prototype. It never merges PRs. It runs two ways: locally on your own Mac, where browser validation and audio also work, or as a Plow cloud agent you text, which you connect to GitHub in that chat by approving a code — never a token. Both think through Plow's inference, so no local Codex or ChatGPT session is needed.
 
 ## What is implemented
 
@@ -32,24 +32,20 @@ Browser validation is configured per issue. A human supplies the trusted test en
 
 ## Install
 
-### On Plow, under Compose
+### On Plow
 
 ```sh
-plow-agents deploy --local --line ln_xxx   # see docs/INSTALL.md for the token
+plow-agents deploy --local --line ln_xxx   # docs/INSTALL.md has the whole path
 ```
 
-Then text the line. Watson asks for the repository and the assignee, and runs a
-cycle every ten minutes.
+Then text the line. Watson sends you a code to connect GitHub, asks for the
+repository and the assignee, and runs a cycle every ten minutes.
 
-**The hosted `plow-agents deploy` path is not usable yet.** It injects only the
-`PLOW_*` variables, so the agent has no GitHub credential and the cycle stands
-down loudly rather than triaging. Until that is addressed, run Watson under
-Compose.
-
-**It will not take a GitHub token in chat, and refuses if you offer one.**
-`GH_TOKEN` is deploy-time input — [docs/INSTALL.md](docs/INSTALL.md#1-give-it-a-github-token--at-deploy-time-not-in-chat)
-owns that contract, including which path can supply it today. What the image is
-and what it deliberately does not own is in
+**It never takes a GitHub token, and refuses if you offer one.** You approve
+the Watson Triage GitHub App, read-only, by typing that code at github.com, and
+root inside the container keeps the tokens where the agent cannot reach them.
+[docs/INSTALL.md](docs/INSTALL.md#1-connect-github-in-chat) owns that
+contract. What the image is and what it deliberately does not own is in
 [docs/cloud-variant.md](docs/cloud-variant.md).
 
 ### On your own machine
@@ -72,6 +68,10 @@ set -a; . ./plow-credentials; set +a
 .venv/bin/watson --home .watson track 123
 .venv/bin/watson --home .watson cycle
 ```
+
+Owner updates are in English unless `init --language pt` asks for Portuguese.
+`watson config --language` changes that later, and `config --repo` and
+`--assignee` do the same for the repository and the login.
 
 Inference reads `PLOW_API_BASE` and `HERMES_CUSTOM_PLOW_API_KEY` (falling back
 to `PLOW_AGENT_TOKEN`) from the environment, which is what sourcing the minted

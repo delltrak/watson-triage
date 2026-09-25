@@ -1,12 +1,17 @@
+import io
 import re
+import shlex
 import signal
 import subprocess
 import time
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 from watson import githubapp
+from watson.cli import main
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -80,6 +85,28 @@ class ImageTests(unittest.TestCase):
         started = time.monotonic()
         subprocess.run(['sh', '-c', f'AUTH=false\n{prelude}\npause\n'], check=True, timeout=10)
         self.assertGreaterEqual(time.monotonic() - started, 0.5)  # $AUTH failing at once still pauses
+
+    def test_every_command_the_skill_names_parses(self):
+        # The chat runs these verbatim. One the CLI does not know ends the
+        # owner's setup on an argparse usage line.
+        skill = (ROOT / 'image/skills/watson-setup/SKILL.md').read_text()
+        home = re.search(r'^WATSON_HOME=(\S+)$', (ROOT / 'image/s6-overlay/s6-rc.d/watson-cycle/run').read_text(),
+                         re.M).group(1)
+        blocks = ''.join(re.findall(r'^```\w*\n(.*?)^```', skill, re.M | re.S)).replace('\\\n', '')
+        commands = [shlex.split(line) for line in blocks.splitlines() if line.startswith('/opt/hermes/.venv/bin/watson ')]
+        self.assertTrue(all(c[1:3] == ['--home', home] for c in commands), commands)  # the service's home
+        named = {' '.join(c[3:5]) if c[3] == 'github' else c[3] for c in commands}
+        self.assertLessEqual({'status', 'github connect', 'init', 'track', 'untrack', 'config'}, named)
+        self.assertTrue(any(c[3] == 'init' and {'--notify-owner', '--language'} <= set(c) for c in commands))
+        fill = {'OWNER/REPO': 'demo/repo', 'LOGIN': 'demo-owner', 'LANG': 'pt'}
+        for command in commands:
+            with self.subTest(' '.join(command[3:])), TemporaryDirectory() as tmp, \
+                    mock.patch('watson.cli.connect', return_value={'state': 'pending'}), \
+                    redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                try:
+                    main(['--home', tmp] + [fill.get(word, word) for word in command[3:]])
+                except SystemExit as exc:
+                    self.fail(f'exit {exc.code}')
 
 
 if __name__ == '__main__':
