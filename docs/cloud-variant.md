@@ -50,10 +50,12 @@ The mechanism is the Watson Triage GitHub App's device flow, split by uid:
   stands. On the owner's disconnect it deletes `token.json` and sends both
   tokens to GitHub's credential revocation endpoint (`POST /credentials/revoke`,
   unauthenticated by design, for `ghu_` and `ghr_` tokens alike), which GitHub
-  may refuse or rate-limit without changing the outcome here. It then publishes
-  `disconnected` with `by_owner`, kept by a marker in the store across restarts
-  and cleared by the next connection, and while it stands the pass sends no
-  refusal notice for the 401 it gets.
+  may refuse or rate-limit without changing the outcome here: the tokens are
+  gone either way, with no copy to retry with, so the status says whether GitHub
+  took the revocation (`revoked`) and the owner is told to revoke it themselves
+  when it did not. It then publishes `disconnected` with `by_owner`, kept by a
+  marker in the store across restarts and cleared by the next connection, and
+  while it stands the pass sends no refusal notice for the 401 it gets.
 - The access token lasts eight hours. Root refreshes it between passes once
   less than two hours are left -- never under a pass, since a refresh retires
   the old pair at once -- and hands each pass the access token alone, as

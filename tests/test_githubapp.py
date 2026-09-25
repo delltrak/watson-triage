@@ -317,10 +317,11 @@ class GitHubAppTest(unittest.TestCase):
         self.assertEqual(json.loads(revoke.data), {'credentials': ['ghu_OLD', 'ghr_OLD']})
         self.assertFalse((self.store / 'token.json').exists())
         self.assertFalse((self.requests / githubapp.REQUEST.format('disconnect')).exists())
-        self.assertEqual((self.published()['state'], self.published()['detail']), ('disconnected', 'by_owner'))
+        self.assertEqual((self.published()['state'], self.published()['detail'], self.published()['revoked']),
+                         ('disconnected', 'by_owner', True))
         self.status.unlink()  # a restart empties /run; the owner's choice outlives it
         self.assertIsNone(self.app().prepare())
-        self.assertEqual((self.published()['detail'], self.github.calls), ('by_owner', []))
+        self.assertEqual((self.published()['detail'], self.published()['revoked'], self.github.calls), ('by_owner', True, []))
         self.ask()
         self.app(DEVICE, GRANTED, USER, LISTED).prepare()  # connecting again ends it
         (self.store / 'token.json').unlink()  # so a token lost after that is not the owner's doing
@@ -329,7 +330,9 @@ class GitHubAppTest(unittest.TestCase):
         self.assertNotIn('detail', self.published())
 
     def test_a_disconnect_stands_however_github_answers_or_however_late_it_is_seen(self):
-        for name, error in (('422', refused(422)), ('offline', urllib.error.URLError('offline')), ('late', None)):
+        # The owner is told whether GitHub took the revocation: nothing is left to retry it with.
+        for name, error, revoked in (('422', refused(422), False), ('offline', urllib.error.URLError('offline'), False),
+                                     ('late', None, True)):
             with self.subTest(name):
                 self.save(5 * 3600)
                 self.ask('disconnect')
@@ -337,10 +340,13 @@ class GitHubAppTest(unittest.TestCase):
                     self.t += githubapp.REQUEST_TTL_S + 1  # after a long pass: still the owner's choice
                 self.assertIsNone(self.app(('POST', REVOKE_URL, error or {})).prepare())
                 self.assertFalse((self.store / 'token.json').exists())
-                self.assertEqual(self.published()['detail'], 'by_owner')
-        self.ask('disconnect')  # nothing left to revoke
+                self.assertEqual((self.published()['detail'], self.published()['revoked']), ('by_owner', revoked))
+        self.save(5 * 3600)
+        self.ask('disconnect')
+        self.assertIsNone(self.app(('POST', REVOKE_URL, urllib.error.URLError('offline'))).prepare())
+        self.ask('disconnect')  # nothing left to revoke, and the refusal before is not forgotten
         self.assertIsNone(self.app().prepare())
-        self.assertEqual((self.published()['detail'], self.github.calls), ('by_owner', []))
+        self.assertEqual((self.published()['detail'], self.published()['revoked'], self.github.calls), ('by_owner', False, []))
 
     def test_the_chat_asks_to_disconnect_even_with_a_code_pending(self):
         self.app().publish('pending', user_code='ABCD-1234', verification_uri='https://github.com/login/device',

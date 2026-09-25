@@ -146,21 +146,24 @@ class App:
     def disconnect(self, tokens):
         """The owner's choice: the tokens go, here and at GitHub, and the marker
         keeps the passes quiet about the refusal that follows until the owner
-        connects again, across restarts, which empty /run."""
+        connects again, across restarts, which empty /run. It also keeps whether
+        GitHub took the revocation: no copy is left to retry with, so a refusal
+        is the owner's to act on, and the status has to say so."""
         self.token_file.unlink(missing_ok=True)
         self.by_owner.touch()
         outcome = 'nothing to revoke'
         if tokens:
             try:
                 # Unauthenticated by design (an authenticated call gets a 403), for
-                # ghu_ and ghr_ tokens alike, 60 an hour; GitHub emails the owner.
+                # ghu_ and ghr_ tokens alike, 60 an hour; GitHub notifies the owner.
                 post_json('POST', 'https://api.github.com/credentials/revoke',
                           json.dumps({'credentials': [t for t in (tokens['access_token'], tokens['refresh_token']) if t]})
                           .encode(), {'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json',
                                       'X-GitHub-Api-Version': '2022-11-28'}, opener=self.opener)
-                outcome = 'GitHub took the revocation'
+                outcome, marker = 'GitHub took the revocation', 'revoked'
             except UNREACHABLE as exc:
-                outcome = f'GitHub did not take the revocation ({type(exc).__name__})'
+                outcome, marker = f'GitHub did not take the revocation ({type(exc).__name__})', 'unrevoked'
+            self.by_owner.write_text(marker)
         self.log(f'disconnected by the owner; {outcome}')
 
     def device_flow(self):
@@ -212,7 +215,8 @@ class App:
                 self.publish('failed', detail='github_unreachable')
         if not tokens:
             if not asked:  # a flow that just ended keeps its outcome for the chat to read
-                self.publish('disconnected', **({'detail': 'by_owner'} if self.by_owner.exists() else {}))
+                self.publish('disconnected', **({'detail': 'by_owner', 'revoked': self.by_owner.read_text() != 'unrevoked'}
+                                                if self.by_owner.exists() else {}))
             return None
         try:
             # Checked only when something moved -- a connect, a refresh, a status

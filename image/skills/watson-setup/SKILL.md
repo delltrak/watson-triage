@@ -253,11 +253,17 @@ On yes:
 `disconnected` with `detail` `by_owner` means it is done. Send this in their
 language, laid out as it is:
 
-> **GitHub is disconnected.** I deleted my access and asked GitHub to revoke it, so I am not checking issues any more. GitHub may email you that a token was revoked: that was this.
+> **GitHub is disconnected.** I deleted my access and asked GitHub to revoke it, so I am not checking issues any more. GitHub may notify you that a token was revoked: that was this.
 >
 > **To connect again**: say "connect GitHub" and I send you a new code.
 >
 > **To remove Watson Triage from GitHub entirely**: revoke it at https://github.com/settings/apps/authorizations and uninstall it at https://github.com/settings/installations
+
+With `revoked` false, GitHub did not take the revocation and nothing is left to
+retry it with. Do not say GitHub was asked to revoke it, or that it may notify
+them. Say instead that you deleted your access but could not reach GitHub, so
+it stays valid there until they revoke Watson Triage themselves, now, at
+https://github.com/settings/apps/authorizations.
 
 `queued: true`: a pass is running, and the disconnect happens when it ends,
 within minutes; say so. The repository, login and tracked numbers stay as they
