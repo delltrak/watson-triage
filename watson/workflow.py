@@ -181,7 +181,7 @@ def cycle(home, *, model=None, github=None, writer=None):
                 # the 401 after the owner disconnected GitHub, until they connect again.
                 outcome['errors'].append({'sync':str(exc)[:500]}); tracked=[]
                 status=getattr(exc,'status',None)
-                if status in notice['refused'] and read_status().get('detail')!='by_owner':
+                if status in notice['refused'] and not read_status().get('by_owner'):
                     tell_owner(store,config,'owner_sync_notice',
                                {'repo':repo,'assignee':login,'status':status,'since':last_sync(home).get('at')},
                                notice['refused'][status].format(repo=repo,assignee=login))

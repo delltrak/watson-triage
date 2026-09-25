@@ -202,12 +202,23 @@ class CycleSafetyTests(unittest.TestCase):
         self.assertEqual([m for m in self.owner.sent if m == refused], [refused, refused])
 
     def test_github_the_owner_disconnected_is_not_reported_as_refused(self):
-        self.github_status.return_value = {'state': 'disconnected', 'detail': 'by_owner'}
-        for _ in range(2): self.assertTrue(self.run_cycle(Refused(401))['errors'])
+        # Statuses as root publishes them. The owner's disconnect stands, by_owner
+        # with it, through a reconnect they abandon or deny.
+        for status in ({'state': 'disconnected', 'detail': 'by_owner', 'by_owner': True},
+                       {'state': 'expired', 'by_owner': True},
+                       {'state': 'denied', 'detail': 'access_denied', 'by_owner': True}):
+            self.github_status.return_value = status
+            for _ in range(2): self.assertTrue(self.run_cycle(Refused(401))['errors'])
         self.assertEqual(self.owner.sent, [])
-        self.github_status.return_value = {'state': 'disconnected'}  # dropped by root, not by the owner
+        # A token root dropped itself is still news: the first refused pass sees 'reconnect', later ticks 'disconnected'.
+        refused = NOTICE['en']['refused'][401].format(repo='demo/repo')
+        self.github_status.return_value = {'state': 'reconnect', 'detail': 'github_refused'}
         self.run_cycle(Refused(401))
-        self.assertEqual(self.owner.sent, [NOTICE['en']['refused'][401].format(repo='demo/repo')])
+        self.assertEqual([m for m in self.owner.sent if m == refused], [refused])
+        self.run_cycle(FakeGitHub())  # a good sync: the next refusal is news again
+        self.github_status.return_value = {'state': 'disconnected'}
+        self.run_cycle(Refused(401))
+        self.assertEqual([m for m in self.owner.sent if m == refused], [refused, refused])
 
     def test_a_transient_sync_failure_is_not_a_message(self):
         class TimedOut(FakeGitHub):

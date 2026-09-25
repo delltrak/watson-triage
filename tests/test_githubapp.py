@@ -322,12 +322,17 @@ class GitHubAppTest(unittest.TestCase):
         self.status.unlink()  # a restart empties /run; the owner's choice outlives it
         self.assertIsNone(self.app().prepare())
         self.assertEqual((self.published()['detail'], self.published()['revoked'], self.github.calls), ('by_owner', True, []))
+        self.ask()  # a reconnect they abandon or deny leaves the choice standing, and the agent can tell
+        self.app(DEVICE, ('POST', githubapp.TOKEN_URL, {'error': 'access_denied'})).prepare()
+        self.assertEqual((self.published()['state'], self.published()['by_owner']), ('denied', True))
         self.ask()
         self.app(DEVICE, GRANTED, USER, LISTED).prepare()  # connecting again ends it
+        self.assertNotIn('by_owner', self.published())
         (self.store / 'token.json').unlink()  # so a token lost after that is not the owner's doing
         self.app().prepare()
         self.assertEqual(self.published()['state'], 'disconnected')
         self.assertNotIn('detail', self.published())
+        self.assertNotIn('by_owner', self.published())
 
     def test_a_disconnect_stands_however_github_answers_or_however_late_it_is_seen(self):
         # The owner is told whether GitHub took the revocation: nothing is left to retry it with.

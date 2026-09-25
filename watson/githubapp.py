@@ -112,7 +112,11 @@ class App:
 
     def publish(self, state, **fields):
         self.status.parent.mkdir(mode=0o755, exist_ok=True)
+        # by_owner rides on every state while the owner's disconnect stands: a
+        # reconnect they abandon or deny ends in another state, and the agent
+        # cannot read the marker to know the passes are meant to stay quiet.
         _write(self.status, {'state': state, **fields, 'install_url': self.install_url,
+                             **({'by_owner': True} if self.by_owner.exists() else {}),
                              'updated_at': self.clock()}, 0o644)
 
     def load(self):
