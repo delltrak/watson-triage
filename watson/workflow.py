@@ -5,7 +5,7 @@ from pathlib import Path
 from .analysis import PlowInference, object_schema, STRING, triage
 from .browser import run_browser, credentials_path
 from .cases import Cases
-from .core import WatsonError, Store, digest, load_config, now, owner_language, private_json
+from .core import LANGUAGE_NAMES, WatsonError, Store, digest, load_config, now, owner_language, private_json
 from .delivery import Plow
 from .github import GitHub
 from .writes import GitHubWriter, MARKER
@@ -35,7 +35,7 @@ def event_cursor(issue, head, access_revision, ci, profile=None):
     return digest({'issue':external,'head':head,'access_revision':access_revision,'ci':ci,'profile':profile})
 
 
-def compose(model, issue, result, state, validation, private_channel, previous):
+def compose(model, issue, result, state, validation, private_channel, previous, language):
     payload={'issue':issue,'triage':result,'state':state,'validation':validation,
              'private_access_channel':private_channel,'previous_case':previous}
     answer=model.ask('Write a short GitHub issue comment in the predominant language of the issue. '
@@ -47,7 +47,7 @@ def compose(model, issue, result, state, validation, private_channel, previous):
         'If blocked, explain validation could not be completed. Do not invent links, attachments, '
         'deployments, fixes or tests. Do not include mentions; the caller adds the verified issue author. '
         'Do not repeat a question already answered. Never request production passwords. '
-        'Also write owner_summary in Brazilian Portuguese describing the CURRENT workflow state and '
+        f'Also write owner_summary in {LANGUAGE_NAMES[language]} describing the CURRENT workflow state and '
         'actual validation result, replacing any stale static-analysis limitations about not running tests.',
         payload,COMMENT_SCHEMA,f'comment-{issue["number"]}-{digest(payload)[:10]}')
     body=answer.get('body','').strip()
@@ -57,11 +57,16 @@ def compose(model, issue, result, state, validation, private_channel, previous):
     return answer['language'], f'@{issue["author"]}\n\n{body}', answer.get('owner_summary',result['summary'])
 
 
-# What the cycle tells the owner on its own. Only this text and validated values
-# (repository, login, numbers) go out this way, never exception text: the chat
-# explains details from `watson status`.
+# What the cycle tells the owner on its own, in their language. Beyond an issue
+# update's summary, only this text and validated values (repository, login,
+# numbers) go out this way, never exception text: the chat explains details
+# from `watson status`.
 NOTICE={
-    'en':{'stuck':'Watson: I could not check {numbers} twice in a row, so I will retry them less often. '
+    'en':{'waiting_access':'Waiting for test access','waiting_info':'Waiting for the author to reply',
+          'reproduced':'Problem reproduced in the test','validated':'Test scenario passed',
+          'blocked':'Validation blocked','triaged':'Triage done','closed':'Issue closed',
+          'expected':'Expected','observed':'Observed',
+          'stuck':'Watson: I could not check {numbers} twice in a row, so I will retry them less often. '
                   'Ask me what went wrong, or tell me to stop tracking them.',
           'set_up':'Watson is set up: watching {repo} for issues assigned to {assignee}, {count} open now. '
                    'Those I look at when you name one; issues assigned from now on I pick up on my own.',
@@ -72,7 +77,11 @@ NOTICE={
                      404:'GitHub cannot find {repo}, or Watson cannot see it; a private repository needs the Watson Triage '
                          'app installed. Reply and I will help. Until then I am not checking issues.',
                      422:'GitHub says {assignee} is not a valid login; tell me the right one. Until then I am not checking issues.'}},
-    'pt':{'stuck':'Watson: não consegui verificar {numbers} duas vezes seguidas, então vou tentar de novo com menos frequência. '
+    'pt':{'waiting_access':'Aguardando acesso de teste','waiting_info':'Aguardando resposta do autor',
+          'reproduced':'Problema reproduzido no teste','validated':'Cenário de teste passou',
+          'blocked':'Validação bloqueada','triaged':'Triagem concluída','closed':'Issue encerrada',
+          'expected':'Esperado','observed':'Observado',
+          'stuck':'Watson: não consegui verificar {numbers} duas vezes seguidas, então vou tentar de novo com menos frequência. '
                   'Me pergunte o que deu errado, ou peça para eu parar de acompanhá-las.',
           'set_up':'Watson configurado: acompanho {repo}, issues atribuídas a {assignee}, {count} abertas agora. '
                    'Essas eu olho quando você me disser o número; as atribuídas daqui em diante eu pego sozinho.',
@@ -87,13 +96,11 @@ NOTICE={
 
 def notify(store, channel, config, run_id, issue, result, state, validation):
     if not channel: return None
-    labels={'waiting_access':'Aguardando acesso de teste','waiting_info':'Aguardando resposta do autor',
-            'reproduced':'Problema reproduzido no teste','validated':'Cenário de teste passou',
-            'blocked':'Validação bloqueada','triaged':'Triagem concluída','closed':'Issue encerrada'}
-    body=f'Watson · #{issue["number"]}\n\n{labels[state]}\n\n{result["summary"]}\n\n{issue["url"]}'
+    words=NOTICE[owner_language(config)]
+    body=f'Watson · #{issue["number"]}\n\n{words[state]}\n\n{result["summary"]}\n\n{issue["url"]}'
     if validation:
         failed=next((s for s in validation['steps'] if s.get('status')=='failed'),None)
-        if failed: body+=f'\n\nEsperado: {failed["expected"]}\nObservado: {failed["actual"]}'
+        if failed: body+=f'\n\n{words["expected"]}: {failed["expected"]}\n{words["observed"]}: {failed["actual"]}'
     media=validation.get('video') if validation and config.get('send_video') else None
     if media and Path(media).suffix!='.mp4': media=None
     return send_owner(store,channel,run_id,'owner_workflow_notice',{'state':state,'body':body,'media':media},body,media)
@@ -217,7 +224,8 @@ def cycle(home, *, model=None, github=None, writer=None):
                         # Don't nag repeatedly while still waiting for the same access.
                         if not(previous and previous['state']==state=='waiting_access'):
                             language,body,owner_summary=compose(model,issue,result,state,validation,
-                                 config.get('private_access_channel','the repository owner through your agreed private channel'),previous)
+                                 config.get('private_access_channel','the repository owner through your agreed private channel'),previous,
+                                 owner_language(config))
                             data['language']=language; data['comment_draft']=body
                             data['summary']=owner_summary
                             result={**result,'summary':owner_summary}

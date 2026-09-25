@@ -22,13 +22,17 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
+LANGUAGE_NAMES = {'en': 'English', 'pt': 'Brazilian Portuguese'}
+
+
 def owner_language(config):
+    # The one reader: a config written before languages, or any other value, is English.
     return 'pt' if config.get('language') == 'pt' else 'en'
 
 
 def repo_name(value):
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value):
-        raise WatsonError("Repositório inválido; use owner/repo.")
+        raise WatsonError('Invalid repository; use owner/repo.')
     return value
 
 
@@ -65,7 +69,7 @@ def load_config(home):
     try:
         config = json.loads((home / 'config.json').read_text())
     except FileNotFoundError:
-        raise WatsonError('Execute watson init primeiro.') from None
+        raise WatsonError('Watson is not configured yet; run watson init first.') from None
     repo_name(config['repository'])
     for repo in config.get('related_repositories', []):
         repo_name(repo)
@@ -128,7 +132,7 @@ class Store:
             try:
                 fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
-                raise WatsonError('Outra triagem do Watson está em execução.') from None
+                raise WatsonError('Another Watson pass is running; try again in a few minutes.') from None
             try:
                 yield
             finally:

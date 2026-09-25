@@ -40,7 +40,7 @@ class FlowTests(unittest.TestCase):
         validation = {'status': 'failed', 'video': '/tmp/none.mp4',
                       'steps': [{'status': 'failed', 'expected': 'ok', 'actual': 'boom'}]}
         result = {'summary': 'resumo'}
-        receipt = notify(store, (FakePlow(), 'chat'), {'notify_owner': True},
+        receipt = notify(store, (FakePlow(), 'chat'), {'notify_owner': True, 'language': 'pt'},
                          1, ISSUE, result, 'reproduced', validation)
         self.assertIsNotNone(receipt)
         chat, body, media = sent[0]

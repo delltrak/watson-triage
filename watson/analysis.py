@@ -6,7 +6,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from .core import WatsonError, digest, now, private_json
+from .core import LANGUAGE_NAMES, WatsonError, digest, now, owner_language, private_json
 from .delivery import plow_endpoint, post_json
 
 
@@ -17,6 +17,10 @@ def object_schema(properties):
 
 STRING = {'type': 'string'}
 STRINGS = {'type': 'array', 'items': STRING}
+STATIC_LIMITATION = {
+    'en': 'Static analysis: the project was not run, the bug was not reproduced and no production release was confirmed.',
+    'pt': 'Análise estática: sem executar o projeto, reproduzir o bug ou confirmar publicação em produção.',
+}
 SELECT_SCHEMA = object_schema({'paths': STRINGS, 'reason': STRING})
 RESULT_SCHEMA = object_schema({
     'status': {'type': 'string', 'enum': ['needs_info', 'investigate', 'awaiting_validation', 'awaiting_release', 'resolved']},
@@ -152,7 +156,7 @@ def validate_result(result, evidence):
 
 
 def triage(store, github, model, config, number):
-    repo = config['repository']
+    repo, language = config['repository'], owner_language(config)
     issue = github.issue(repo, number)
     store.observe(repo, issue)
     refs, limitations = github.references(issue)
@@ -160,7 +164,7 @@ def triage(store, github, model, config, number):
     ci = github.ci(repo, index['sha']) if hasattr(github, 'ci') else []
     # Include head and fresh references: a new commit/merge invalidates stale evidence.
     fingerprint = digest({'version': 2, 'issue': issue, 'refs': refs, 'head': index['sha'], 'ci':ci,
-                          'limitations': limitations, 'model': config.get('model')})
+                          'limitations': limitations, 'model': config.get('model'), 'language': language})
     previous = store.latest(repo, number)
     run_id, needed = store.begin(repo, number, fingerprint)
     if not needed:
@@ -185,21 +189,23 @@ def triage(store, github, model, config, number):
                 evidence[f'source:{i}'] = github.file(repo, path, index['sha'])
             except (WatsonError, UnicodeDecodeError) as exc:
                 limitations.append(f'Arquivo {path} não lido: {exc}')
-        limitations.append('Análise estática: sem executar o projeto, reproduzir o bug ou confirmar publicação em produção.')
+        limitations.append(STATIC_LIMITATION[language])
         if len(json.dumps(evidence, ensure_ascii=False)) > 180000:
             raise WatsonError('Evidências excedem o limite do MVP; reduza o escopo da investigação.')
+        # The owner's language is the instruction's last sentence, so the
+        # Portuguese before it does not pull the answer its way.
         result = model.ask(
-            'Você é Watson. Faça uma triagem em português brasileiro, natural e objetiva, para '
+            'Você é Watson. Faça uma triagem natural e objetiva para '
             + config['assignee'] + '. Priorize o estado atual da conversa, distingua fato observado, '
             'relato de terceiro e hipótese. Um commit ou merge NÃO prova publicação ou correção em produção. '
             'Não proponha refazer trabalho já implementado. As únicas evidências atuais estão no mapa evidence; '
             'a memória anterior pode estar desatualizada. Cada finding deve citar IDs EXATOS desse mapa. '
             'Summary deve explicar situação e próximo passo. Voice_script deve ter 70–130 palavras, sem URLs '
             'ou listas, para uma mensagem de voz. Liste perguntas específicas para o autor somente se '
-            'necessárias. Escreva questions_for_author no idioma predominante da issue; '
-            'summary, voice_script e demais campos permanecem em português. '
+            'necessárias. Escreva questions_for_author no idioma predominante da issue. '
             'Nunca alegue que enviou mensagens, marcou autores, criou branches ou fez merge. '
-            'Se faltarem dados, diga isso. Reprodução de bug não foi executada. Nunca faça merge.',
+            'Se faltarem dados, diga isso. Reprodução de bug não foi executada. Nunca faça merge. '
+            f'Write summary, voice_script, finding claims, next_steps and limitations in {LANGUAGE_NAMES[language]}.',
             {'evidence': evidence, 'previous': json.loads(previous['result']) if previous else None,
              'limitations': limitations}, RESULT_SCHEMA, f'run-{run_id}-triage')
         validate_result(result, evidence)

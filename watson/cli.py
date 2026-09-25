@@ -55,12 +55,15 @@ def main(argv=None):
     init.add_argument('--delivery', choices=['text', 'both'], default='text')
     init.add_argument('--notify-owner', action='store_true',
                       help='Enviar a atualização de cada issue ao dono da linha Plow.')
+    init.add_argument('--language', choices=['en', 'pt'], default='en',
+                      help="The language of the messages Watson sends the owner on its own.")
     for cmd in ('track', 'untrack', 'triage'):
         sub.add_parser(cmd).add_argument('number', type=int)
     sub.add_parser('sync')
-    conf = sub.add_parser('config', help='Change the repository or login of a configured install.')
+    conf = sub.add_parser('config', help='Change the repository, login or language of a configured install.')
     conf.add_argument('--repo')
     conf.add_argument('--assignee')
+    conf.add_argument('--language', choices=['en', 'pt'])
     sub.add_parser('status')
     sub.add_parser('cycle', help='Rodada completa com efeitos explicitamente configurados.')
     access = sub.add_parser('access', help='Guardar acesso de teste localmente; nunca publicar na issue.')
@@ -118,6 +121,11 @@ def main(argv=None):
             # it runs before init, and during a pass it reports `queued`.
             print(json.dumps(connect(), ensure_ascii=False, indent=2))
             return 0
+        if args.command == 'status' and not (args.home / 'config.json').exists():
+            # Setup starts from `status`, so it answers before init too, and
+            # creates no database to do it.
+            print(json.dumps({'configured': False, 'github': describe(read_status())}, ensure_ascii=False, indent=2))
+            return 0
         store = Store(args.home)
         # The owner's commands do not wait for a pass, which holds the lock for
         # minutes: "track 123" mid-pass used to fail in chat. A running pass
@@ -125,11 +133,11 @@ def main(argv=None):
         with nullcontext() if args.command in {'track', 'untrack', 'status', 'config'} else store.lock():
             if args.command == 'init':
                 if (args.home / 'config.json').exists():
-                    raise WatsonError('Already configured; use watson config to change the repository or login.')
+                    raise WatsonError('Already configured; use watson config to change the repository, login or language.')
                 config = {'repository': repo_name(args.repo), 'assignee': login(args.assignee),
                           'related_repositories': [repo_name(r) for r in args.related],
                           'model': args.model, 'delivery': args.delivery,
-                          'notify_owner': args.notify_owner,
+                          'notify_owner': args.notify_owner, 'language': args.language,
                           'speech_provider': 'chatgpt', 'speech_voice': 'sol', 'audio_mode': 'native'}
                 private_json(args.home / 'config.json', config)
                 output = {'initialized': str(args.home), 'config': config}
@@ -138,18 +146,20 @@ def main(argv=None):
                 github = GitHub([config['repository']] + config['related_repositories'])
                 if args.command in {'track', 'untrack'}:
                     if args.number < 1:
-                        raise WatsonError('Número de issue inválido.')
+                        raise WatsonError('Invalid issue number.')
                     store.track(config['repository'], args.number, args.command == 'track', explicit=True)
                     output = {'number': args.number, 'tracked': args.command == 'track'}
                 elif args.command == 'sync':
                     output = sync(store, github, config)
                 elif args.command == 'config':
-                    if args.repo is None and args.assignee is None:
-                        raise WatsonError('Nothing to change: give --repo, --assignee or both.')
+                    if (args.repo, args.assignee, args.language) == (None, None, None):
+                        raise WatsonError('Nothing to change: give --repo, --assignee or --language.')
                     if args.repo is not None:
                         config['repository'] = repo_name(args.repo)
                     if args.assignee is not None:
                         config['assignee'] = login(args.assignee)
+                    if args.language is not None:
+                        config['language'] = args.language
                     private_json(args.home / 'config.json', config)
                     output = {'config': config}
                 elif args.command == 'triage':
@@ -181,7 +191,7 @@ def main(argv=None):
                             store.track(config['repository'], row['number'], False)
                 elif args.command == 'status':
                     last = args.home / 'last-cycle.json'
-                    output = {'github': describe(read_status()), 'config': config,
+                    output = {'configured': True, 'github': describe(read_status()), 'config': config,
                               'last_cycle': json.loads(last.read_text()) if last.exists() else None,
                               **store.history()}
                 elif args.command in {'show', 'voice'}:
