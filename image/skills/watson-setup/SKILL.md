@@ -1,6 +1,6 @@
 ---
 name: watson-setup
-description: Open on every greeting and first message, after watson status. Set up Watson and keep it pointed at the right work — connect GitHub, choose the repository and the login whose assigned issues are the owner's, track issues by number, and change any of that later. Trigger when the owner first messages this agent, when they ask Watson to watch a repository or to track or look at an issue number, when they want to change the repository or login, when they ask to connect or reconnect GitHub, when they switch language, when they ask what Watson can do or for help, and when they answer a message Watson sent them on its own.
+description: Open on every greeting and first message, after watson status. Set up Watson and keep it pointed at the right work — connect GitHub, choose the repository and the login whose assigned issues are the owner's, track issues by number, and change any of that later. Trigger when the owner first messages this agent, when they ask Watson to watch a repository or to track or look at an issue number, when they want to change the repository or login, when they ask to connect, reconnect or disconnect GitHub, when they switch language, when they ask what Watson can do or for help, and when they answer a message Watson sent them on its own.
 allowed-tools: Bash(/opt/hermes/.venv/bin/watson:*)
 ---
 
@@ -21,6 +21,9 @@ Start here, every time. It answers before setup and while a pass is running:
 ```
 
 - `github.state` is anything but `connected`: GitHub comes first (section 1).
+  With `detail` `by_owner` they disconnected it themselves: say so, and
+  connect only when they ask.
+- They asked to disconnect GitHub: section 9.
 - `configured` is false: sections 2 to 4, one question at a time.
 - They named an issue number: section 5.
 - They asked to switch language, or clearly switched: section 6.
@@ -233,3 +236,30 @@ language, laid out as it is:
 > **4. Language**: English or Portuguese; write in the one you want.
 >
 > I read and report. I never merge, and I do not open pull requests from here.
+
+## 9. Disconnect GitHub
+
+When they ask to disconnect GitHub ("disconnect GitHub", "desconecta o
+GitHub"), confirm first, in their language:
+
+> Disconnect GitHub? I delete my access and stop checking issues until you connect me again.
+
+On yes:
+
+```bash
+/opt/hermes/.venv/bin/watson --home /var/lib/hermes/watson github disconnect
+```
+
+`disconnected` with `detail` `by_owner` means it is done. Send this in their
+language, laid out as it is:
+
+> **GitHub is disconnected.** I deleted my access and asked GitHub to revoke it, so I am not checking issues any more. GitHub may email you that a token was revoked: that was this.
+>
+> **To connect again**: say "connect GitHub" and I send you a new code.
+>
+> **To remove Watson Triage from GitHub entirely**: revoke it at https://github.com/settings/apps/authorizations and uninstall it at https://github.com/settings/installations
+
+`queued: true`: a pass is running, and the disconnect happens when it ends,
+within minutes; say so. The repository, login and tracked numbers stay as they
+are, and Watson does not report GitHub's refusal while it is disconnected. When
+they connect again it picks up where it was, and tells them so.

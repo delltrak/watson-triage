@@ -50,6 +50,8 @@ class CycleSafetyTests(unittest.TestCase):
         self.owner = Owner()
         patcher = patch('watson.workflow.Plow'); self.addCleanup(patcher.stop)
         patcher.start().from_config.return_value = self.owner
+        patcher = patch('watson.workflow.read_status', return_value={}); self.addCleanup(patcher.stop)  # root's, off the image
+        self.github_status = patcher.start()
 
     def cli(self, *args):
         with redirect_stdout(io.StringIO()): return main(['--home', str(self.home), *args])
@@ -198,6 +200,14 @@ class CycleSafetyTests(unittest.TestCase):
         for github in (Refused(401), FakeGitHub(), Refused(401), Refused(401)): self.run_cycle(github)
         refused = NOTICE['en']['refused'][401].format(repo='demo/repo')
         self.assertEqual([m for m in self.owner.sent if m == refused], [refused, refused])
+
+    def test_github_the_owner_disconnected_is_not_reported_as_refused(self):
+        self.github_status.return_value = {'state': 'disconnected', 'detail': 'by_owner'}
+        for _ in range(2): self.assertTrue(self.run_cycle(Refused(401))['errors'])
+        self.assertEqual(self.owner.sent, [])
+        self.github_status.return_value = {'state': 'disconnected'}  # dropped by root, not by the owner
+        self.run_cycle(Refused(401))
+        self.assertEqual(self.owner.sent, [NOTICE['en']['refused'][401].format(repo='demo/repo')])
 
     def test_a_transient_sync_failure_is_not_a_message(self):
         class TimedOut(FakeGitHub):

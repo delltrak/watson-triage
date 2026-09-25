@@ -18,7 +18,7 @@ from unittest import mock
 
 from watson import cli, githubapp
 from watson.core import WatsonError, private_json
-from watson.githubapp import App, connect, describe
+from watson.githubapp import App, describe, request
 from watson.workflow import NOTICE
 from test_watson import CONFIG
 
@@ -31,6 +31,7 @@ PENDING = ('POST', githubapp.TOKEN_URL, {'error': 'authorization_pending'})
 GRANTED = ('POST', githubapp.TOKEN_URL, {'access_token': 'ghu_A', 'refresh_token': 'ghr_A', 'expires_in': 28800,
                                          'refresh_token_expires_in': 15897600, 'token_type': 'bearer', 'scope': ''})
 USER = ('GET', USER_URL, {'login': 'octocat'})
+REVOKE_URL = 'https://api.github.com/credentials/revoke'
 INSTALLATIONS_URL = 'https://api.github.com/user/installations?per_page=100'
 LISTED = ('GET', INSTALLATIONS_URL, {'total_count': 0, 'installations': []})  # installed nowhere yet
 # Everything that must stay in the root process: never in a log line, and the tokens never in the status.
@@ -95,8 +96,8 @@ class GitHubAppTest(unittest.TestCase):
         return App('Iv23client', 'watson-triage', store=self.store, status=self.status, requests=self.requests,
                    opener=self.github, sleep=self.sleep, clock=self.clock, log=self.logs.append)
 
-    def ask(self):
-        path = self.requests / githubapp.REQUEST
+    def ask(self, action='connect'):
+        path = self.requests / githubapp.REQUEST.format(action)
         path.touch()
         os.utime(path, (self.t, self.t))
 
@@ -132,7 +133,7 @@ class GitHubAppTest(unittest.TestCase):
         self.assertEqual(stat.S_IMODE((self.store / 'token.json').stat().st_mode), 0o600)
         self.assertEqual(self.token(), {'access_token': 'ghu_A', 'refresh_token': 'ghr_A',
                                         'expires_at': 1_000_000.0 + 20 + 28800, 'connected_at': 1_000_000.0 + 20})
-        self.assertFalse((self.requests / githubapp.REQUEST).exists())
+        self.assertFalse((self.requests / githubapp.REQUEST.format('connect')).exists())
         poll = self.github.form(1)
         self.assertEqual(poll, {'client_id': ['Iv23client'], 'device_code': ['DEVICE-CODE-40'],
                                 'grant_type': ['urn:ietf:params:oauth:grant-type:device_code']})
@@ -176,13 +177,13 @@ class GitHubAppTest(unittest.TestCase):
         self.ask()
         self.t += githubapp.REQUEST_TTL_S + 1
         self.assertIsNone(self.app().prepare())
-        self.assertFalse((self.requests / githubapp.REQUEST).exists())
+        self.assertFalse((self.requests / githubapp.REQUEST.format('connect')).exists())
         self.assertEqual((self.published()['state'], self.github.calls), ('disconnected', []))
 
     def test_only_a_regular_file_is_a_request(self):
         target = self.root / 'precious'
         target.write_text('keep')
-        path = self.requests / githubapp.REQUEST
+        path = self.requests / githubapp.REQUEST.format('connect')
         for plant, remove in ((lambda: path.symlink_to(target), path.unlink), (path.mkdir, path.rmdir)):
             with self.subTest(plant=remove.__name__):
                 plant()
@@ -210,7 +211,7 @@ class GitHubAppTest(unittest.TestCase):
         self.ask()
         self.app(DEVICE, ('POST', githubapp.TOKEN_URL, {'error': 'access_denied'})).wait(30)
         self.assertEqual(self.published()['state'], 'denied')
-        self.assertFalse((self.requests / githubapp.REQUEST).exists())
+        self.assertFalse((self.requests / githubapp.REQUEST.format('connect')).exists())
         self.assertTrue(1_000_000.0 + 30 <= self.t < 1_000_000.0 + 32)  # returned at the tick, not on the answer
         self.ask()
         approved = self.t + 5  # one poll after the code was issued
@@ -306,30 +307,77 @@ class GitHubAppTest(unittest.TestCase):
         self.assertEqual(self.published()['state'], 'connected')
         self.assertNotIn('repositories', self.published())
 
+    def test_the_owner_disconnects_and_it_stands_until_they_connect_again(self):
+        self.save(5 * 3600, connected_at=999_000.0)
+        self.ask('disconnect')
+        self.app(('POST', REVOKE_URL, {})).wait(30)
+        self.assertTrue(1_000_000.0 + 30 <= self.t < 1_000_000.0 + 32)  # answered at once, and no pass early
+        revoke = self.github.calls[0]
+        self.assertIsNone(revoke.get_header('Authorization'))  # GitHub refuses this call authenticated
+        self.assertEqual(json.loads(revoke.data), {'credentials': ['ghu_OLD', 'ghr_OLD']})
+        self.assertFalse((self.store / 'token.json').exists())
+        self.assertFalse((self.requests / githubapp.REQUEST.format('disconnect')).exists())
+        self.assertEqual((self.published()['state'], self.published()['detail']), ('disconnected', 'by_owner'))
+        self.status.unlink()  # a restart empties /run; the owner's choice outlives it
+        self.assertIsNone(self.app().prepare())
+        self.assertEqual((self.published()['detail'], self.github.calls), ('by_owner', []))
+        self.ask()
+        self.app(DEVICE, GRANTED, USER, LISTED).prepare()  # connecting again ends it
+        (self.store / 'token.json').unlink()  # so a token lost after that is not the owner's doing
+        self.app().prepare()
+        self.assertEqual(self.published()['state'], 'disconnected')
+        self.assertNotIn('detail', self.published())
+
+    def test_a_disconnect_stands_however_github_answers_or_however_late_it_is_seen(self):
+        for name, error in (('422', refused(422)), ('offline', urllib.error.URLError('offline')), ('late', None)):
+            with self.subTest(name):
+                self.save(5 * 3600)
+                self.ask('disconnect')
+                if error is None:
+                    self.t += githubapp.REQUEST_TTL_S + 1  # after a long pass: still the owner's choice
+                self.assertIsNone(self.app(('POST', REVOKE_URL, error or {})).prepare())
+                self.assertFalse((self.store / 'token.json').exists())
+                self.assertEqual(self.published()['detail'], 'by_owner')
+        self.ask('disconnect')  # nothing left to revoke
+        self.assertIsNone(self.app().prepare())
+        self.assertEqual((self.published()['detail'], self.github.calls), ('by_owner', []))
+
+    def test_the_chat_asks_to_disconnect_even_with_a_code_pending(self):
+        self.app().publish('pending', user_code='ABCD-1234', verification_uri='https://github.com/login/device',
+                           expires_at=self.t + 900)
+
+        def root_answers(_):
+            self.t += 1
+            self.app().publish('disconnected', detail='by_owner')
+        self.assertEqual(request('disconnect', status=self.status, requests=self.requests, sleep=root_answers,
+                                 clock=self.clock),
+                         {'state': 'disconnected', 'detail': 'by_owner',
+                          'install_url': 'https://github.com/apps/watson-triage/installations/new'})
+        self.assertTrue((self.requests / githubapp.REQUEST.format('disconnect')).is_file())
+
     def test_the_chat_asks_then_relays_roots_answer(self):
         def root_answers(_):
             self.t += 1
             self.app().publish('pending', user_code='ABCD-1234', verification_uri='https://github.com/login/device',
                                expires_at=self.t + 900)
-        answer = connect(status=self.status, requests=self.requests, sleep=root_answers, clock=self.clock)
-        self.assertEqual(answer, {'state': 'pending', 'user_code': 'ABCD-1234', 'minutes_left': 15,
-                                  'verification_uri': 'https://github.com/login/device',
-                                  'install_url': 'https://github.com/apps/watson-triage/installations/new'})
-        request = self.requests / githubapp.REQUEST
-        self.assertTrue(request.is_file())
-        request.unlink()
+        chat = partial(request, 'connect', status=self.status, clock=self.clock)
+        self.assertEqual(chat(requests=self.requests, sleep=root_answers),
+                         {'state': 'pending', 'user_code': 'ABCD-1234', 'minutes_left': 15,
+                          'verification_uri': 'https://github.com/login/device',
+                          'install_url': 'https://github.com/apps/watson-triage/installations/new'})
+        asked = self.requests / githubapp.REQUEST.format('connect')
+        self.assertTrue(asked.is_file())
+        asked.unlink()
         self.t += 120  # asking again while the code is good returns it, with no new request
-        again = connect(status=self.status, requests=self.requests, sleep=lambda _: self.fail('asked again'),
-                        clock=self.clock)
-        self.assertEqual((again['user_code'], again['minutes_left'], request.exists()), ('ABCD-1234', 13, False))
+        again = chat(requests=self.requests, sleep=lambda _: self.fail('asked again'))
+        self.assertEqual((again['user_code'], again['minutes_left'], asked.exists()), ('ABCD-1234', 13, False))
         self.t += 900  # expired: a new request, unanswered while a pass runs
-        busy = connect(status=self.status, requests=self.requests, wait_s=0, clock=self.clock)
-        self.assertEqual((busy['queued'], request.exists()), (True, True))
+        busy = chat(requests=self.requests, wait_s=0)
+        self.assertEqual((busy['queued'], asked.exists()), (True, True))
         with self.assertRaises(WatsonError):
-            connect(status=self.status, requests=self.root / 'missing', wait_s=0, clock=self.clock)
+            chat(requests=self.root / 'missing', wait_s=0)
         self.status.unlink()  # root has never answered here: not a pass to wait for
-        self.assertEqual(connect(status=self.status, requests=self.requests, wait_s=0, clock=self.clock),
-                         {'state': 'unknown'})
+        self.assertEqual(chat(requests=self.requests, wait_s=0), {'state': 'unknown'})
 
     def test_the_chat_connects_before_init_without_the_store_and_status_shows_github(self):
         home = self.root / 'watson'
@@ -343,10 +391,10 @@ class GitHubAppTest(unittest.TestCase):
             self.t += 1
             self.app().publish('pending', user_code='ABCD-1234', verification_uri='https://github.com/login/device',
                                expires_at=self.t + 900)
-        chat = partial(connect, status=self.status, requests=self.requests, sleep=root_answers, clock=self.clock)
-        with mock.patch('watson.cli.connect', chat):
+        chat = partial(request, status=self.status, requests=self.requests, sleep=root_answers, clock=self.clock)
+        with mock.patch('watson.cli.request', chat):
             self.assertEqual(run('github', 'connect', '--language', 'pt')['user_code'], 'ABCD-1234')
-        self.assertTrue((self.requests / githubapp.REQUEST).is_file())
+        self.assertTrue((self.requests / githubapp.REQUEST.format('connect')).is_file())
         # No Store, so no lock to wait on mid-pass: only the language to announce the connection in.
         self.assertEqual([p.name for p in home.iterdir()], ['connect.json'])
         self.assertEqual(json.loads((home / 'connect.json').read_text()), {'language': 'pt'})
@@ -409,7 +457,7 @@ class AnnounceTests(unittest.TestCase):
             self.assertEqual(cli.main(['--home', str(self.home), 'github', 'announce']), code)
 
     def test_the_owner_hears_of_a_new_connection_once_in_the_language_they_connected_in(self):
-        with redirect_stdout(io.StringIO()), mock.patch('watson.cli.connect', dict):
+        with redirect_stdout(io.StringIO()), mock.patch('watson.cli.request', return_value={}):
             cli.main(['--home', str(self.home), 'github', 'connect', '--language', 'pt'])
         self.connected(100.0, 'octo/a', 'octo/b')
         self.announce()

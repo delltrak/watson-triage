@@ -177,10 +177,11 @@ def cycle(home, *, model=None, github=None, writer=None):
             except Exception as exc:
                 # Every issue would fail the same way, so none is read. A refusal
                 # is told once per stretch since the last good sync; a 5xx or a
-                # timeout passes by itself and is not worth a message.
+                # timeout passes by itself and is not worth a message, and nor is
+                # the 401 after the owner disconnected GitHub, until they connect again.
                 outcome['errors'].append({'sync':str(exc)[:500]}); tracked=[]
                 status=getattr(exc,'status',None)
-                if status in notice['refused']:
+                if status in notice['refused'] and read_status().get('detail')!='by_owner':
                     tell_owner(store,config,'owner_sync_notice',
                                {'repo':repo,'assignee':login,'status':status,'since':last_sync(home).get('at')},
                                notice['refused'][status].format(repo=repo,assignee=login))

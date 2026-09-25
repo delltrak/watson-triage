@@ -10,7 +10,7 @@ from pathlib import Path
 from .analysis import PlowInference, render, triage
 from .core import Store, WatsonError, load_config, login, now, private_json, repo_name
 from .delivery import Plow, deliver
-from .githubapp import connect, describe, read_status
+from .githubapp import describe, read_status, request
 from .speech import generate_voice
 from .github import GitHub
 
@@ -75,8 +75,9 @@ def main(argv=None):
     metrics_mode.add_argument('--register', action='store_true')
     metrics_mode.add_argument('--dry-run', action='store_true')
     sub.add_parser('mcp', help='Ponte stdio para Hermes; sem ferramentas de envio ou escrita GitHub.')
-    github = sub.add_parser('github', help='Connect GitHub by a code the owner approves at github.com; never a token.')
-    github.add_argument('action', choices=['connect', 'announce'])
+    github = sub.add_parser('github', help='Connect GitHub by a code the owner approves at github.com, never a token, '
+                                           'or disconnect it.')
+    github.add_argument('action', choices=['connect', 'disconnect', 'announce'])
     github.add_argument('--language', choices=['en', 'pt'],
                         help='The language the owner connects in, for the message that says it worked.')
     watch = sub.add_parser('watch', help='Uma rodada; não instala agendamento nem envia mensagens.')
@@ -128,7 +129,7 @@ def main(argv=None):
             if args.language:
                 args.home.mkdir(mode=0o700, parents=True, exist_ok=True)
                 private_json(args.home / 'connect.json', {'language': args.language})
-            print(json.dumps(connect(), ensure_ascii=False, indent=2))
+            print(json.dumps(request(args.action), ensure_ascii=False, indent=2))
             return 0
         if args.command == 'status' and not (args.home / 'config.json').exists():
             # Setup starts from `status`, so it answers before init too, and

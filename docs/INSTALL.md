@@ -44,11 +44,15 @@ and nothing downstream can undo it. If you pasted one anyway, revoke it.
 The tokens GitHub hands back stay with root inside the container, in
 `/var/lib/watson-github`, where the agent cannot even look; each pass gets the
 eight-hour access token and nothing else. `docker compose down -v` erases them
-with the rest, and you connect again. To revoke Watson, remove Watson Triage at
-<https://github.com/settings/apps/authorizations> or uninstall it at
-<https://github.com/settings/installations>; the next pass is refused, Watson
-tells you, and it can connect again in chat. How this holds, and what it does
-not cover, is in [cloud-variant.md](cloud-variant.md).
+with the rest, and you connect again. To disconnect from the chat, tell Watson
+"disconnect GitHub": it asks you to confirm, deletes the tokens and asks GitHub
+to revoke them (GitHub emails you that it did), and stops checking issues,
+without reporting that as a refusal, until you ask it to connect again. To
+remove Watson on GitHub's side as well, revoke Watson Triage at
+<https://github.com/settings/apps/authorizations> and uninstall it at
+<https://github.com/settings/installations>; done there alone, the next pass is
+refused, Watson tells you, and it can connect again in chat. How this holds,
+and what it does not cover, is in [cloud-variant.md](cloud-variant.md).
 
 **Coming from the token install.** Installs that predate the app read a
 personal access token from `/etc/watson/github`. Nothing reads it any more:

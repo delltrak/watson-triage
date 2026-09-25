@@ -33,7 +33,8 @@ The mechanism is the Watson Triage GitHub App's device flow, split by uid:
   which root writes and the agent can only read: a state, the login, the
   install URL, the user code and verification URI while one is pending, and
   once connected the repositories the owner can pick from (name, whether
-  private, last push; ten at most, and how many there are).
+  private, last push; ten at most, and how many there are). `watson github
+  disconnect` asks the same way, with a second request file.
 - Root's half, `python3 -I -m watson.githubapp`, runs inside the `watson-cycle`
   service, between passes. It asks GitHub for a device code, polls while the
   owner approves it, and keeps the access and refresh tokens in
@@ -46,7 +47,13 @@ The mechanism is the Watson Triage GitHub App's device flow, split by uid:
   one page of `/user/installations/{id}/repositories` for each of the first
   ten, which with a user token covers only what the app is installed on and
   the owner can read. A list GitHub will not give is left out; the connection
-  stands.
+  stands. On the owner's disconnect it deletes `token.json` and sends both
+  tokens to GitHub's credential revocation endpoint (`POST /credentials/revoke`,
+  unauthenticated by design, for `ghu_` and `ghr_` tokens alike), which GitHub
+  may refuse or rate-limit without changing the outcome here. It then publishes
+  `disconnected` with `by_owner`, kept by a marker in the store across restarts
+  and cleared by the next connection, and while it stands the pass sends no
+  refusal notice for the 401 it gets.
 - The access token lasts eight hours. Root refreshes it between passes once
   less than two hours are left -- never under a pass, since a refresh retires
   the old pair at once -- and hands each pass the access token alone, as

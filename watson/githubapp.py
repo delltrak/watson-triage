@@ -30,14 +30,14 @@ from .delivery import post_json
 STORE = Path('/var/lib/watson-github')           # root 0700 from the image
 STATUS = Path('/run/watson-github/status.json')  # root 0644 in root 0755: the agent reads it, never writes it
 REQUESTS = Path('/var/lib/hermes')                # root-owned; the agent may create entries in it
-REQUEST = 'watson-github.connect'
+REQUEST = 'watson-github.{}'                      # .connect or .disconnect, an empty file from the chat
 TOKEN_URL = 'https://github.com/login/oauth/access_token'
 # A refresh retires the access token it replaces, so it happens between passes,
 # never under one, and early enough that no pass outlives the token it was given.
 # A refresh lost in flight -- killed after GitHub answers, before the new pair
 # is saved -- leaves only a retired pair, and the owner connects once more.
 REFRESH_BEFORE_S = 2 * 3600
-# Older than this, a request is a leftover from before a restart, not an owner waiting.
+# Older than this, a connect is a leftover from before a restart, not an owner waiting.
 REQUEST_TTL_S = 600
 # What GitHub or the network can do to one call.
 UNREACHABLE = (OSError, ValueError, KeyError, WatsonError, http.client.HTTPException)
@@ -59,11 +59,11 @@ def read_status(path=STATUS):
         return {}
 
 
-def _requested(requests):
+def _requested(requests, action):
     """The request's mtime when a regular file stands for it, else None. Anything
     else the agent puts there is never opened or followed, and never makes a loop spin."""
     try:
-        info = os.lstat(Path(requests) / REQUEST)
+        info = os.lstat(Path(requests) / REQUEST.format(action))
     except FileNotFoundError:
         return None
     return info.st_mtime if stat.S_ISREG(info.st_mode) else None
@@ -80,6 +80,7 @@ class App:
         self.client_id, self.install_url = client_id, f'https://github.com/apps/{slug}/installations/new'
         self.store, self.status, self.requests = Path(store), Path(status), Path(requests)
         self.token_file, self.opener, self.sleep, self.clock = self.store / 'token.json', opener, sleep, clock
+        self.by_owner = self.store / 'disconnected-by-owner'
         self.log = log or (lambda line: print(f'watson-github: {line}', file=sys.stderr, flush=True))
 
     def form(self, url, **fields):
@@ -134,12 +135,33 @@ class App:
         self.token_file.unlink(missing_ok=True)
         self.publish('reconnect', detail=detail)
 
-    def asked(self):
-        made = _requested(self.requests)
+    def asked(self, action):
+        made = _requested(self.requests, action)
         if made is None:
             return False
-        os.unlink(self.requests / REQUEST)
-        return self.clock() - made < REQUEST_TTL_S
+        os.unlink(self.requests / REQUEST.format(action))
+        # Nobody waits on a stale connect; the owner's disconnect stands however late it is seen.
+        return action == 'disconnect' or self.clock() - made < REQUEST_TTL_S
+
+    def disconnect(self, tokens):
+        """The owner's choice: the tokens go, here and at GitHub, and the marker
+        keeps the passes quiet about the refusal that follows until the owner
+        connects again, across restarts, which empty /run."""
+        self.token_file.unlink(missing_ok=True)
+        self.by_owner.touch()
+        outcome = 'nothing to revoke'
+        if tokens:
+            try:
+                # Unauthenticated by design (an authenticated call gets a 403), for
+                # ghu_ and ghr_ tokens alike, 60 an hour; GitHub emails the owner.
+                post_json('POST', 'https://api.github.com/credentials/revoke',
+                          json.dumps({'credentials': [t for t in (tokens['access_token'], tokens['refresh_token']) if t]})
+                          .encode(), {'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json',
+                                      'X-GitHub-Api-Version': '2022-11-28'}, opener=self.opener)
+                outcome = 'GitHub took the revocation'
+            except UNREACHABLE as exc:
+                outcome = f'GitHub did not take the revocation ({type(exc).__name__})'
+        self.log(f'disconnected by the owner; {outcome}')
 
     def device_flow(self):
         code = self.form('https://github.com/login/device/code', client_id=self.client_id)
@@ -162,6 +184,7 @@ class App:
                 self.publish({'access_denied': 'denied', 'expired_token': 'expired'}.get(error, 'failed'),
                              detail=error)
                 return None
+            self.by_owner.unlink(missing_ok=True)  # connected again: a refusal is news once more
             return self.save(answer, self.clock())
         self.log('device code expired unused')
         self.publish('expired')
@@ -176,7 +199,11 @@ class App:
             return self._prepare()
 
     def _prepare(self):
-        tokens, asked = self.load(), self.asked()
+        tokens = self.load()
+        if self.asked('disconnect'):
+            self.disconnect(tokens)
+            tokens = None
+        asked = self.asked('connect')
         if asked and not tokens:
             try:
                 tokens = self.device_flow()
@@ -185,7 +212,7 @@ class App:
                 self.publish('failed', detail='github_unreachable')
         if not tokens:
             if not asked:  # a flow that just ended keeps its outcome for the chat to read
-                self.publish('disconnected')
+                self.publish('disconnected', **({'detail': 'by_owner'} if self.by_owner.exists() else {}))
             return None
         try:
             # Checked only when something moved -- a connect, a refresh, a status
@@ -223,7 +250,7 @@ class App:
         approving a code on github.com makes one."""
         end = self.clock() + seconds
         while self.clock() < end:
-            if _requested(self.requests) is not None:
+            if any(_requested(self.requests, action) is not None for action in ('connect', 'disconnect')):
                 asked = self.clock()
                 self.prepare()
                 if (read_status(self.status).get('connected_at') or 0) > asked:
@@ -240,16 +267,16 @@ def describe(status, *, clock=time.time):
     return out
 
 
-def connect(*, status=STATUS, requests=REQUESTS, wait_s=30, sleep=time.sleep, clock=time.time):
-    """The chat's half of `watson github connect`: ask root, then read what it published."""
+def request(action, *, status=STATUS, requests=REQUESTS, wait_s=30, sleep=time.sleep, clock=time.time):
+    """The chat's half of `watson github connect|disconnect`: ask root, then read what it published."""
     current = read_status(status)
-    if not (current.get('state') == 'pending' and current['expires_at'] > clock()):
+    if action == 'disconnect' or not (current.get('state') == 'pending' and current['expires_at'] > clock()):
         asked = clock()
         try:
-            (Path(requests) / REQUEST).touch()
+            (Path(requests) / REQUEST.format(action)).touch()
         except FileNotFoundError:
-            raise WatsonError('watson github connect needs the Plow image; '
-                              'elsewhere, sign in with gh auth login.') from None
+            raise WatsonError(f'watson github {action} needs the Plow image; '
+                              'elsewhere, gh auth signs in and out.') from None
         while clock() - asked < wait_s and read_status(status).get('updated_at', 0) <= asked:
             sleep(1)
         current = read_status(status)
