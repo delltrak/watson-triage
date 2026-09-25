@@ -62,6 +62,10 @@ RUN set -eu; \
     uv pip install --python /opt/hermes/.venv/bin/python --no-deps --build-constraints /tmp/build-constraints.txt /opt/watson; \
     /opt/hermes/.venv/bin/watson --help >/dev/null
 
+# The pass's HOME: empty and root's, so nothing the agent writes is read as
+# config. The why is in the watson-cycle run script.
+RUN install -d -m 0555 -o root -g root /opt/watson/cycle-home
+
 # The boot layer. COPY merges into the base's tree, so its own `user` bundle
 # entries survive alongside this one:
 #

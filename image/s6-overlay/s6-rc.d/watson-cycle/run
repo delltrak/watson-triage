@@ -28,11 +28,20 @@ STASH=/opt/plow/watson-github
 # why it is mounted rather than passed through `env_file`: it never enters that
 # environment at all, so nothing has to remember to remove it.
 #
+# HOME is an empty directory root owns, never the agent's: `gh` reads
+# $HOME/.config/gh/config.yml, and an `http_unix_socket` the agent wrote there
+# sends "Authorization: token $GH_TOKEN" to a socket it listens on, every pass.
+# HOME rather than GH_CONFIG_DIR, so every reader anchored on it is covered;
+# set, never unset, because unset falls back to the passwd home, which the
+# agent owns. `env -i` is what keeps it that way: it clears GH_CONFIG_DIR and
+# the XDG_* variables, which would otherwise override it.
+#
 # Residual, named here and in issue #2: the child below runs as `hermes`, the
-# gateway's own uid, so its /proc entry is readable while a pass runs.
+# gateway's own uid, so its /proc entry -- the token with it -- is readable for
+# as long as a pass runs: minutes when an issue changed.
 cycle() {
   /command/s6-setuidgid hermes env -i \
-    PATH="$PATH" HOME=/var/lib/hermes \
+    PATH="$PATH" HOME=/opt/watson/cycle-home \
     PLOW_API_BASE="$PLOW_API_BASE" \
     PLOW_AGENT_TOKEN="$PLOW_AGENT_TOKEN" \
     HERMES_CUSTOM_PLOW_API_KEY="$HERMES_CUSTOM_PLOW_API_KEY" \
@@ -50,10 +59,12 @@ cycle() {
 # eats an issue update. That is the exact loss the checkpoint ordering exists
 # to prevent, so the trap must not introduce it.
 #
-# An in-flight pass is left to finish or to be stopped by the container's own
-# grace period, where a killed send is recorded `unknown` rather than lost.
-# `exit 0` is deferred until the foreground child returns, which is exactly
-# that: immediate while idle, after the pass while one is running.
+# An in-flight pass is left to finish or to be SIGKILLed at the end of the
+# container's grace period, and that is not clean yet (issue #9). The pass is
+# never told to stop, so it keeps starting new issues after SIGTERM; and a send
+# it is killed in stays `sending`, because the handler that records `unknown`
+# never runs. `exit 0` is deferred until the foreground child returns:
+# immediate while idle, after the pass while one is running.
 trap 'exit 0' TERM INT
 
 while :; do

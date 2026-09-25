@@ -30,7 +30,7 @@ token sits at `/opt/plow/watson-github`, owned `root:root 0600`, and the cycle
 service reads it as root before dropping privileges. Nothing puts it in the environment s6 publishes, so nothing has to remember to
 take it out — the gateway shares this container and has a shell, and anything
 there is one `printenv` from the model. It does reach one environment: the
-cycle's own child, for the seconds a pass runs, which is the residual below.
+cycle's own child, for as long as a pass runs, which is the residual below.
 
 A bind mount's permissions are the **host's**, so the cycle does not trust the
 reported mode: every pass tries to read the file as uid 10000 and **refuses to
@@ -38,11 +38,22 @@ run** if that succeeds. Two ordinary setups trip it — Docker Desktop on macOS,
 which does not enforce mounted modes at all, and a Linux host whose own uid is
 10000, where `0600` lands on `hermes` itself.
 
+The pass runs with `HOME` set to an empty directory root owns, not the agent's
+home. `gh` reads its config from `$HOME/.config/gh`, and a config the agent
+wrote there (an `http_unix_socket`) would hand the token to a socket the agent
+listens on, every pass.
+
 The residual this page will not overstate away: the cycle hands the token to a
 child running as `hermes`, the gateway's own uid, so `/proc/<pid>/environ` is
-readable for the seconds a pass takes. Closing that needs a separate uid for the
+readable for as long as a pass runs -- minutes when an issue changed, since
+triaging it waits on inference. Closing that needs a separate uid for the
 cycle, which moves `watson init` out of chat setup and into the service -- a
 product change rather than a hardening pass.
+
+Shutdown is not clean yet either (srosro/watson-triage#9). On SIGTERM the
+service starts no new pass, but the running one is never told to stop: it keeps
+starting new issues until it ends or the container's grace period SIGKILLs it,
+and a send killed that way stays `sending` rather than `unknown`.
 
 ## What this repository must not own
 
