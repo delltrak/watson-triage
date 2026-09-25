@@ -75,11 +75,13 @@ set -a; . ./plow-credentials; set +a
 
 Inference reads `PLOW_API_BASE` and `HERMES_CUSTOM_PLOW_API_KEY` (falling back
 to `PLOW_AGENT_TOKEN`) from the environment, which is what sourcing the minted
-credential above supplies — or `plow_credential_file` from the config below, which
-delivery already uses. Without one of those, the first investigation fails with
-`Sem credencial de inferência`. There is no `codex login` step: Codex was the
-inference backend until this fork replaced it, and nothing in Watson shells out
-to it any more.
+credential above supplies — or `plow_credential_file` from the config below.
+Without one of those, the first investigation fails with
+`Sem credencial de inferência`. Owner delivery and the Agent Index client
+resolve the same way, so all three reach the same host with the same bearer;
+when the file is set, it wins, and its base and token are taken as a pair.
+There is no `codex login` step: Codex was the inference backend until this
+fork replaced it, and nothing in Watson shells out to it any more.
 
 The initial sync records a baseline without processing the entire backlog.
 Explicitly track existing issues. Later assignments are tracked automatically.

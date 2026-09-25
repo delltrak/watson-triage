@@ -1,6 +1,8 @@
+import http.client
 import json
 import os
 import sqlite3
+import subprocess
 import unittest
 import urllib.error
 from io import BytesIO
@@ -9,7 +11,9 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from watson.analysis import PlowInference
-from watson.core import WatsonError
+from watson.core import WatsonError, private_json
+from watson.delivery import Plow
+from watson.metrics import index_client
 
 SCHEMA = {'type': 'object', 'properties': {'answer': {'type': 'string'}},
           'required': ['answer'], 'additionalProperties': False}
@@ -109,10 +113,29 @@ class InferenceTest(unittest.TestCase):
     def test_a_malformed_usage_block_never_blocks_the_answer(self):
         # Usage is telemetry; a provider sending a shape we did not expect must
         # not cost the caller its result.
-        for label, usage in (('absent', None), ('a string', 'unexpected')):
+        for label, usage in (
+            ('absent', None), ('a string', 'unexpected'),
+            # A null counter reached int(None) in record_usage, which runs
+            # before the answer is read: the paid completion was discarded and
+            # the next pass paid for it again.
+            ('null cached tokens', {'prompt_tokens': 9, 'completion_tokens': 2,
+                                    'prompt_tokens_details': {'cached_tokens': None}}),
+            ('null counters', {'prompt_tokens': None, 'completion_tokens': None}),
+            ('details not an object', {'prompt_tokens': 9, 'prompt_tokens_details': 'x'}),
+        ):
             with self.subTest(label):
                 result, _ = self.ask(completion(OK, usage))
                 self.assertEqual(result, {'answer': 'ok'})
+
+    def test_a_dropped_connection_is_a_retryable_error_not_a_traceback(self):
+        # http.client's own errors, not URLError: IncompleteRead escaped the
+        # CLI as a traceback.
+        for exc in (http.client.IncompleteRead(b'{"cho'),
+                    http.client.RemoteDisconnected('closed'), ConnectionResetError()):
+            def opener(request, timeout=None, exc=exc):
+                raise exc
+            with self.subTest(type(exc).__name__), self.assertRaisesRegex(WatsonError, 'não respondeu'):
+                PlowInference(self.home, opener=opener).ask('inst', {}, SCHEMA, 'label')
 
     def test_an_http_error_reports_the_status_not_the_body(self):
         def opener(request, timeout=None):
@@ -198,6 +221,54 @@ class CredentialTest(unittest.TestCase):
             with self.subTest(label), patch.dict(os.environ, env, clear=True):
                 with self.assertRaisesRegex(WatsonError, expected):
                     PlowInference(self.home).ask('inst', {}, SCHEMA, 'label')
+
+    def test_delivery_goes_where_inference_goes(self):
+        # A hosted agent's bearer is the placeholder 'proxied', valid only at
+        # the proxy PLOW_API_BASE names. Delivery pinned to api.plow.co got a
+        # 401 there on every pass while inference worked, and the Index client
+        # was never told the base at all.
+        for label, env, config in (
+            ('hosted, behind the proxy',
+             {'PLOW_API_BASE': 'https://proxy.example/', 'PLOW_AGENT_TOKEN': 'proxied',
+              'HERMES_CUSTOM_PLOW_API_KEY': 'proxied'}, {}),
+            ('local, from the environment',
+             {'PLOW_API_BASE': 'https://api.plow.co', 'PLOW_AGENT_TOKEN': 'real'}, {}),
+            ('local, from a minted file',
+             {'PLOW_API_BASE': 'https://elsewhere.example'}, 'PLOW_AGENT_TOKEN=minted\n'),
+        ):
+            # PATH only because the Index client hands it to its subprocess.
+            with self.subTest(label), patch.dict(os.environ, {**env, 'PATH': '/usr/bin'}, clear=True):
+                if isinstance(config, str):
+                    config = self.credential_file(config)
+                opener, seen = responds(completion(OK))
+                PlowInference.from_config(self.home, config, opener=opener).ask(
+                    'inst', {}, SCHEMA, 'label')
+                asked = []
+                plow = Plow.from_config(config)
+                plow.request = lambda method, url, data=None, headers=None: (
+                    asked.append((url, headers)) or {'line': {'uid': 'l'}, 'chats': []})
+                with self.assertRaises(WatsonError):
+                    plow.owner_chat()  # No chats: only the request matters here.
+                self.assertEqual(asked[0][0], seen['url'].replace(
+                    '/v1/chat/completions', '/v1/agents/cloud/me'))
+                self.assertEqual(asked[0][1]['Authorization'], seen['auth'])
+                private_json(self.home / 'config.json',
+                             {'repository': 'o/r', 'agent_index_id': 'a', **config})
+                with patch('subprocess.run', return_value=subprocess.CompletedProcess([], 0, '')) as run:
+                    index_client(self.home, dry_run=True)
+                client = run.call_args.kwargs['env']
+                self.assertEqual(client['PLOW_API_BASE'] + '/v1/chat/completions', seen['url'])
+                self.assertEqual(f"Bearer {client['PLOW_AGENT_TOKEN']}", seen['auth'])
+
+    def test_delivery_refuses_a_plaintext_base_or_no_bearer_like_inference(self):
+        for label, env, expected in (
+            ('a plaintext base', {'PLOW_API_BASE': 'http://api.plow.co',
+                                  'PLOW_AGENT_TOKEN': 'tok'}, 'HTTPS'),
+            ('no bearer anywhere', {}, 'HERMES_CUSTOM_PLOW_API_KEY'),
+        ):
+            with self.subTest(label), patch.dict(os.environ, env, clear=True):
+                with self.assertRaisesRegex(WatsonError, expected):
+                    Plow.from_config({})
 
     def test_the_configured_model_survives_from_config(self):
         opener, seen = responds(completion(OK))

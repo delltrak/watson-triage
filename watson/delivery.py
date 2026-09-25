@@ -66,6 +66,29 @@ def credential_values(config):
     return values
 
 
+def plow_endpoint(config):
+    """(base, bearer) for every Plow call: delivery, inference and the Index
+    client. On a hosted agent the bearer is the placeholder 'proxied', which
+    only the proxy at PLOW_API_BASE accepts, so a caller pinned to its own base
+    fails there on every call. A minted file is a pair, never mixed with the
+    environment's base; otherwise both come from what plow-init publishes.
+    """
+    values = credential_values(config)
+    if values:
+        base, token = values.get('PLOW_API_BASE', 'https://api.plow.co'), values['PLOW_AGENT_TOKEN']
+    else:
+        base = os.environ.get('PLOW_API_BASE') or 'https://api.plow.co'
+        token = os.environ.get('HERMES_CUSTOM_PLOW_API_KEY') or os.environ.get('PLOW_AGENT_TOKEN')
+    base = base.rstrip('/')
+    if urlparse(base).scheme != 'https':
+        raise WatsonError('A inferência exige HTTPS; verifique PLOW_API_BASE.')
+    if not token:
+        raise WatsonError('Sem credencial de inferência: HERMES_CUSTOM_PLOW_API_KEY '
+                          'não está no ambiente nem plow_credential_file no config. '
+                          'Conecte uma linha do Plow.')
+    return base, token
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise WatsonError('Redirecionamento recusado na entrega.')
@@ -89,17 +112,14 @@ def post_json(method, url, data=None, headers=None, timeout=45, opener=None):
 
 class Plow:
     """Owner-DM only. No recipient/URL supplied by model output is accepted."""
-    def __init__(self, token=None, request=None):
-        self.token = token or os.environ.get('PLOW_AGENT_TOKEN')
-        if not self.token:
-            raise WatsonError('Conecte uma linha do Plow; PLOW_AGENT_TOKEN não está configurado.')
-        self.base = 'https://api.plow.co'
+    def __init__(self, token, base='https://api.plow.co', request=None):
+        self.token, self.base = token, base
         self.request = request or self._request
 
     @classmethod
     def from_config(cls, config):
-        values = credential_values(config)
-        return cls(token=values['PLOW_AGENT_TOKEN']) if values else cls()
+        base, token = plow_endpoint(config)
+        return cls(token, base)
 
     def _request(self, method, url, data=None, headers=None):
         return post_json(method, url, data, headers)
