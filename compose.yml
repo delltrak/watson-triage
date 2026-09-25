@@ -18,8 +18,10 @@ services:
       # with everything else, and the owner connects again.
       - watson-github:/var/lib/watson-github
       # The agent's home, kept across `up`/`down` for its sessions and setup.
-      # `docker compose down -v` starts this agent fresh, and is what an edit
-      # to SOUL.md needs before the agent sees it.
+      # plow-init recomposes SOUL.md from the image on every boot, so a new
+      # persona needs only `up -d --build`. `docker compose down -v` starts
+      # this agent fresh, and with it goes usage not yet reported to the
+      # Agent Index.
       - agent-home:/var/lib/hermes
     # The only bound on shutdown: nothing in s6 times out the gateway or the
     # cycle, so Docker's SIGKILL at the end of this period is what stops them.

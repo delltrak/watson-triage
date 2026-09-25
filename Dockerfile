@@ -10,13 +10,19 @@
 #   docker-content-digest: sha256:0c3892e9…90ff0 for base-67021a70…
 FROM public.ecr.aws/e1h7x4a2/plow-cloud-agents:base-67021a7029e33e80bcb27899be6515a5a0e9b37b@sha256:0c3892e93c1a001c61fb7106396e0a4b7e0219008184fd90719caa84a3390ff0
 
-# Identity: only what is specific to this agent. plow-init writes the home's
-# SOUL.md on every boot as the base persona followed by this file; nothing is
-# COPYed to /var/lib/hermes/SOUL.md, which is overwritten at boot.
-COPY image/persona.md /opt/hermes/plow-seed/persona.md
-# The mode in its own step: `COPY --chmod=` is BuildKit-only, and a stock Docker
-# still selects the legacy builder, where it fails the build outright.
-RUN chmod 0644 /opt/hermes/plow-seed/persona.md
+# Identity: Watson first, then the base's rules. plow-init writes the home's
+# SOUL.md on every boot from the base persona plus an optional appended one,
+# and the model follows what it reads first: appended after "You are a Plow
+# assistant", Watson was ignored and the first boot pitched Mac errands. So the
+# persona goes in front of the base file, here at build. The base text is read
+# from the image, not copied into this repo, so its rules still come from the
+# base; nothing replaces it whole (plow-hermes-agent#66), and nothing is COPYed
+# to /var/lib/hermes/SOUL.md, which is overwritten at boot.
+COPY image/persona.md /tmp/watson-persona.md
+RUN cat /tmp/watson-persona.md /opt/hermes/plow-seed/SOUL.md > /tmp/SOUL.md; \
+    mv /tmp/SOUL.md /opt/hermes/plow-seed/SOUL.md; \
+    chmod 0644 /opt/hermes/plow-seed/SOUL.md; \
+    rm /tmp/watson-persona.md
 
 # Both copies, as the base image does. /var/lib/hermes/skills is what a home
 # that starts empty is seeded from and what the gateway reads; /opt/hermes/skills

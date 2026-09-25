@@ -109,6 +109,21 @@ class ImageTests(unittest.TestCase):
                 except SystemExit as exc:
                     self.fail(f'exit {exc.code}')
 
+    def test_watson_is_read_before_the_platform_and_the_skill_says_when_to_open(self):
+        # Appended after the base's "You are a Plow assistant", the persona was
+        # ignored: the first boot pitched Mac errands and never ran status.
+        docker, persona = (ROOT / 'Dockerfile').read_text(), (ROOT / 'image/persona.md').read_text()
+        self.assertIn('cat /tmp/watson-persona.md /opt/hermes/plow-seed/SOUL.md > ', docker)
+        self.assertNotIn('/opt/hermes/plow-seed/persona.md', docker)  # nothing appended after the base
+        self.assertTrue(persona.startswith('# Watson\n\nYou are Watson.'))
+        self.assertIn('/opt/hermes/.venv/bin/watson --home /var/lib/hermes/watson status', persona)
+        # Hermes shows a skill's description cut to its first ~57 characters.
+        skill = (ROOT / 'image/skills/watson-setup/SKILL.md').read_text()
+        head = re.search(r'^description: (.*)$', skill, re.M).group(1)[:57]
+        self.assertIn('greeting', head)
+        # Plow runs a plain "1." list into one block; the templates keep the number in the bold.
+        self.assertFalse(re.search(r'^> \d+\. ', skill, re.M))
+
 
 if __name__ == '__main__':
     unittest.main()
