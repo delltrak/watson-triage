@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 
 from .analysis import PlowInference, render, triage
@@ -101,7 +102,9 @@ def main(argv=None):
             serve(args.home)
             return 0
         store = Store(args.home)
-        with store.lock():
+        # One-row writes and reads do not wait for a pass, which holds the lock
+        # for minutes: "track 123" mid-pass used to fail in chat.
+        with nullcontext() if args.command in {'track', 'untrack', 'status'} else store.lock():
             if args.command == 'init':
                 if (args.home / 'config.json').exists():
                     raise WatsonError('Esta instalação já foi configurada; use outra pasta para outro repositório.')
@@ -120,7 +123,7 @@ def main(argv=None):
                 if args.command in {'track', 'untrack'}:
                     if args.number < 1:
                         raise WatsonError('Número de issue inválido.')
-                    store.track(config['repository'], args.number, args.command == 'track')
+                    store.track(config['repository'], args.number, args.command == 'track', explicit=True)
                     output = {'number': args.number, 'tracked': args.command == 'track'}
                 elif args.command == 'sync':
                     output = sync(store, github, config)
@@ -136,12 +139,12 @@ def main(argv=None):
                     if not 1 <= args.limit <= 20:
                         raise WatsonError('O limite deve ficar entre 1 e 20.')
                     output = {'sync': sync(store, github, config), 'runs': [], 'skipped': []}
-                    rows = store.db.execute('''SELECT number FROM issues
+                    rows = store.db.execute('''SELECT number,explicit FROM issues
                         WHERE repo=? AND tracked=1 ORDER BY COALESCE(checked,'') ASC,number''',
                         (config['repository'],)).fetchall()
                     for row in rows[:args.limit]:
                         fresh = github.issue(config['repository'], row['number'])
-                        if config['assignee'] not in fresh['assignees']:
+                        if not row['explicit'] and config['assignee'] not in fresh['assignees']:
                             store.track(config['repository'], row['number'], False)
                             output['skipped'].append({'number': row['number'], 'reason': 'Não está mais atribuída ao usuário.'})
                             continue

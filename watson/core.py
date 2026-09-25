@@ -6,7 +6,7 @@ import os
 import re
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -20,6 +20,10 @@ def now():
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def owner_language(config):
+    return 'pt' if config.get('language') == 'pt' else 'en'
 
 
 def repo_name(value):
@@ -88,11 +92,27 @@ class Store:
         if 'assigned' not in columns:
             self.db.execute('ALTER TABLE issues ADD COLUMN assigned INTEGER DEFAULT 0')
             self.db.execute('UPDATE issues SET assigned=1')
+        for column in ('explicit INTEGER DEFAULT 0', 'failures INTEGER DEFAULT 0', 'retry_at TEXT'):
+            if column.split()[0] not in columns:
+                self.db.execute(f'ALTER TABLE issues ADD COLUMN {column}')
         self.db.commit()
 
     def checked(self, repo, number):
-        self.db.execute('UPDATE issues SET checked=?,changed=0 WHERE repo=? AND number=?', (now(), repo, number))
+        self.db.execute('UPDATE issues SET checked=?,changed=0,failures=0,retry_at=NULL WHERE repo=? AND number=?',
+                        (now(), repo, number))
         self.db.commit()
+
+    def failed(self, repo, number):
+        # 10 minutes, doubling up to a day: a number that keeps failing neither
+        # holds a pass's slots nor re-pays inference every pass. `checked` stays
+        # the last success.
+        failures = self.db.execute('SELECT failures FROM issues WHERE repo=? AND number=?',
+                                   (repo, number)).fetchone()['failures'] + 1
+        retry = datetime.now(timezone.utc) + timedelta(seconds=min(600 * 2 ** (failures - 1), 86400))
+        self.db.execute('UPDATE issues SET failures=?,retry_at=? WHERE repo=? AND number=?',
+                        (failures, retry.isoformat(), repo, number))
+        self.db.commit()
+        return failures
 
     @contextmanager
     def lock(self):
@@ -120,10 +140,15 @@ class Store:
                             (issue['title'], observed, repo, number))
         self.db.commit()
 
-    def track(self, repo, number, enabled=True):
-        self.db.execute('''INSERT INTO issues(repo,number,title,tracked,changed) VALUES(?,?,?,?,?)
-            ON CONFLICT(repo,number) DO UPDATE SET tracked=excluded.tracked,changed=excluded.changed''',
-                        (repo, number, f'#{number}', int(enabled), int(enabled)))
+    def track(self, repo, number, enabled=True, explicit=False):
+        # An owner's track is followed whoever the issue is assigned to; an
+        # assignment-driven one never clears that, and any untrack does. Every
+        # (re)track restarts the backoff.
+        self.db.execute('''INSERT INTO issues(repo,number,title,tracked,changed,explicit) VALUES(?,?,?,?,?,?)
+            ON CONFLICT(repo,number) DO UPDATE SET tracked=excluded.tracked,changed=excluded.changed,
+              explicit=CASE WHEN excluded.tracked THEN MAX(explicit,excluded.explicit) ELSE 0 END,
+              failures=0,retry_at=NULL''',
+                        (repo, number, f'#{number}', int(enabled), int(enabled), int(explicit and enabled)))
         self.db.commit()
 
     def latest(self, repo, number):

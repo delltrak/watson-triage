@@ -5,7 +5,7 @@ from pathlib import Path
 from .analysis import PlowInference, object_schema, STRING, triage
 from .browser import run_browser, credentials_path
 from .cases import Cases
-from .core import WatsonError, Store, digest, load_config, now
+from .core import WatsonError, Store, digest, load_config, now, owner_language
 from .delivery import Plow
 from .github import GitHub
 from .writes import GitHubWriter, MARKER
@@ -57,9 +57,17 @@ def compose(model, issue, result, state, validation, private_channel, previous):
     return answer['language'], f'@{issue["author"]}\n\n{body}', answer.get('owner_summary',result['summary'])
 
 
+# What the cycle tells the owner on its own. Only this text and validated values
+# (numbers) go out this way, never exception text: the chat explains details.
+NOTICE={
+    'en':{'stuck':'Watson: I could not check {numbers} twice in a row, so I will retry them less often. '
+                  'Ask me what went wrong, or tell me to stop tracking them.'},
+    'pt':{'stuck':'Watson: não consegui verificar {numbers} duas vezes seguidas, então vou tentar de novo com menos frequência. '
+                  'Me pergunte o que deu errado, ou peça para eu parar de acompanhá-las.'}}
+
+
 def notify(store, channel, config, run_id, issue, result, state, validation):
     if not channel: return None
-    p, chat = channel
     labels={'waiting_access':'Aguardando acesso de teste','waiting_info':'Aguardando resposta do autor',
             'reproduced':'Problema reproduzido no teste','validated':'Cenário de teste passou',
             'blocked':'Validação bloqueada','triaged':'Triagem concluída','closed':'Issue encerrada'}
@@ -69,7 +77,12 @@ def notify(store, channel, config, run_id, issue, result, state, validation):
         if failed: body+=f'\n\nEsperado: {failed["expected"]}\nObservado: {failed["actual"]}'
     media=validation.get('video') if validation and config.get('send_video') else None
     if media and Path(media).suffix!='.mp4': media=None
-    key=store.claim_action(run_id,'owner_workflow_notice',{'state':state,'body':body,'media':media})
+    return send_owner(store,channel,run_id,'owner_workflow_notice',{'state':state,'body':body,'media':media},body,media)
+
+
+def send_owner(store, channel, run_id, kind, payload, body, media=None):
+    p, chat = channel
+    key=store.claim_action(run_id,kind,payload)
     try:
         receipt=p.send(chat,body,media)
         store.action_result(key,'accepted',receipt)
@@ -79,24 +92,38 @@ def notify(store, channel, config, run_id, issue, result, state, validation):
         raise WatsonError('Notificação não confirmada; sem repetição automática.') from None
 
 
+def tell_owner(store, config, kind, payload, body):
+    # Never fatal to the pass. The claim sends a payload once; a Plow that
+    # cannot be reached claims nothing.
+    if not config.get('notify_owner'): return None
+    try:
+        plow=Plow.from_config(config)
+        return send_owner(store,(plow,plow.owner_chat()),None,kind,payload,body)
+    except Exception: return None
+
+
 def cycle(home, *, model=None, github=None, writer=None):
     home=Path(home).resolve(); config=load_config(home); store=Store(home)
     github=github or GitHub([config['repository']]+config.get('related_repositories',[]))
     model=model or PlowInference.from_config(home,config)
     writer=writer or GitHubWriter(config['repository'],enabled=config.get('github_comments',False))
-    cases=Cases(store); outcome={'processed':[],'unchanged':[],'errors':[]}
+    cases=Cases(store); outcome={'processed':[],'unchanged':[],'skipped':[],'errors':[]}
+    repo=config['repository']; login=config['assignee']; stuck=[]
     try:
         with store.lock():
             from .cli import sync
             outcome['sync']=sync(store,github,config)
-            tracked=store.db.execute('SELECT number FROM issues WHERE repo=? AND tracked=1 ORDER BY COALESCE(checked,\'\'),number',
-                                    (config['repository'],)).fetchall()
+            # A failing issue waits out its backoff, then queues by when it
+            # became due, so it can neither hold every slot nor starve.
+            tracked=store.db.execute('''SELECT number,explicit,checked FROM issues WHERE repo=? AND tracked=1
+                AND COALESCE(retry_at,'')<=? ORDER BY COALESCE(retry_at,checked,''),number''',(repo,now())).fetchall()
             for row in tracked[:config.get('cycle_limit',3)]:
-                number=row['number']; repo=config['repository']
+                number=row['number']
                 try:
                     issue=github.issue(repo,number)
-                    if config['assignee'] not in issue['assignees']:
-                        store.track(repo,number,False); continue
+                    if not row['explicit'] and login not in issue['assignees']:
+                        store.track(repo,number,False)
+                        outcome['skipped'].append({'number':number,'reason':f'no longer assigned to {login}'}); continue
                     head=github.source_index(repo)['sha']
                     ci=github.ci(repo,head) if hasattr(github,'ci') else []
                     previous=cases.get(repo,number)
@@ -179,5 +206,11 @@ def cycle(home, *, model=None, github=None, writer=None):
                                                 'comment':data.get('comment'),'notification':data.get('notification')})
                 except Exception as exc:
                     outcome['errors'].append({'number':number,'error':str(exc)[:500]})
+                    # Told once per streak, on the second failure in a row; the
+                    # last success in the key tells one streak from the next.
+                    if store.failed(repo,number)==2: stuck.append([number,row['checked']])
+            if stuck:
+                tell_owner(store,config,'owner_stuck_notice',{'repo':repo,'stuck':stuck},
+                           NOTICE[owner_language(config)]['stuck'].format(numbers=', '.join(f'#{n}' for n,_ in stuck)))
     finally: store.db.close()
     return outcome
