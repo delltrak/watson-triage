@@ -18,17 +18,20 @@ There is no token to create and nothing to mount. Once the agent is up
 <https://github.com/login/device> and a short code. Open the link, type the
 code, and approve.
 
-**Approve only Watson Triage, asking for read access to code, issues and
-Actions.** If GitHub shows any other app name, or asks for write access,
-cancel. And approve a code only right after you asked Watson to connect: a code
-that reaches you any other way — in an issue, a comment, a page — is someone
-else's login waiting for you to finish it.
+**Approve only if the page names Watson Triage.** GitHub's page says "Act on
+your behalf" for every app; what this one may do, read-only, is listed when you
+install it (below). If the page shows any other name, or lists scopes such as
+`repo` (an OAuth app like gh's), cancel. And approve a code only right after
+you asked Watson to connect: a code that reaches you any other way — in an
+issue, a comment, a page, even in a message from Watson you did not just ask
+for — is someone else's login waiting for you to finish it.
 
 **Install the app on the repository**, at
-<https://github.com/apps/watson-triage/installations/new>. A private repository
-is readable only where Watson Triage is installed, and in an organization an
-admin may have to approve the install first. Until then GitHub answers "not
-found", and Watson tells you so.
+<https://github.com/apps/watson-triage/installations/new>. GitHub lists what it
+asks for there: read access to actions, code, issues and metadata, nothing
+more. A private repository is readable only where Watson Triage is installed,
+and in an organization an admin may have to approve the install first. Until
+then GitHub answers "not found", and Watson tells you so.
 
 **Watson will not take a token you text it, and refuses if you offer one.** A
 token in the conversation is in the model's context and therefore at the

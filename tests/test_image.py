@@ -97,9 +97,9 @@ class ImageTests(unittest.TestCase):
         commands = [shlex.split(line) for line in blocks.splitlines() if line.startswith('/opt/hermes/.venv/bin/watson ')]
         self.assertTrue(all(c[1:3] == ['--home', home] for c in commands), commands)  # the service's home
         named = {' '.join(c[3:5]) if c[3] == 'github' else c[3] for c in commands}
-        self.assertLessEqual({'status', 'github connect', 'init', 'track', 'untrack', 'config'}, named)
+        self.assertLessEqual({'status', 'github connect', 'init', 'track', 'untrack', 'config', 'show'}, named)
         self.assertTrue(any(c[3] == 'init' and {'--notify-owner', '--language'} <= set(c) for c in commands))
-        fill = {'OWNER/REPO': 'demo/repo', 'LOGIN': 'demo-owner', 'LANG': 'pt'}
+        fill = {'OWNER/REPO': 'demo/repo', 'LOGIN': 'demo-owner', 'LANG': 'pt', 'RUN_ID': '1'}
         for command in commands:
             with self.subTest(' '.join(command[3:])), TemporaryDirectory() as tmp, \
                     mock.patch('watson.cli.connect', return_value={'state': 'pending'}), \

@@ -7,14 +7,10 @@ allowed-tools: Bash(/opt/hermes/.venv/bin/watson:*)
 # Watson setup
 
 **Tracking an issue is not setup.** If the owner names an issue number and this
-install is already configured, run `track` (section 5) and stop — do not ask for
+install is already configured, do section 5 and nothing else — do not ask for
 a repository or an assignee, and do not run `init`, which refuses a second time
 and would end the exchange on an error instead of the thing they asked for.
 Sections 2 to 4 are for an install that has no configuration yet.
-
-What you send is iMessage, in the owner's language: no backticks, **bold** is
-fine, and a blank line between steps. Every `watson` command answers in
-English; tell them what it means in their words, never paste it.
 
 ## 0. Where things stand
 
@@ -27,7 +23,7 @@ Start here, every time. It answers before setup and while a pass is running:
 - `github.state` is anything but `connected`: GitHub comes first (section 1).
 - `configured` is false: sections 2 to 4, one question at a time.
 - They named an issue number: section 5.
-- `config.language` is not the language they write in: save theirs (section 6).
+- They asked to switch language, or clearly switched: section 6.
 - They asked what you can do: section 8.
 - They are answering a message Watson sent on its own: section 7.
 
@@ -65,15 +61,18 @@ It prints the `github` object of `status`. By `state`:
 
 - `pending`: send `verification_uri` and `user_code` exactly as given, the code
   on a line of its own, and say it expires in `minutes_left` minutes. Tell them
-  to approve only **Watson Triage** asking for read-only access, and to cancel
-  if GitHub shows another name or asks to write. Asked again while the code is
-  pending, it gives the same code back.
+  to approve only if the page names **Watson Triage**: "Act on your behalf" is
+  how GitHub describes every app, and this one can only read. Any other name,
+  or a page listing scopes such as repo, means cancel. Asked again while the
+  code is pending, it gives the same code back.
 - `connected`: done; `login` is the account they connected.
 - `denied`, `expired`, `failed` or `reconnect`: that attempt is over; run it
   again for a new code. `failed` with `github_unreachable` means GitHub could
   not be reached: try again in a few minutes.
 - `queued: true`: a pass is running, and the code comes when it ends. Say so;
   when they write again, run it again and it hands back that code.
+- `unknown`: Watson's GitHub side is not running here. Tell the owner that
+  whoever runs the container has to check its log.
 
 When they say they approved it, run `status`: `connected` means it worked;
 still `pending`, check once more in a few seconds.
@@ -129,9 +128,21 @@ or they ask you to stop:
 /opt/hermes/.venv/bin/watson --home /var/lib/hermes/watson untrack 123
 ```
 
-Both are a local record, and both work while a pass is running. The next pass
-reads the issue and texts them what it found; after that they hear from Watson
-when it moves, not on a schedule.
+Both are a local record, and both work while a pass is running. If `runs[]` in
+`status` has no `complete` run for the number, the next pass reads the issue
+and texts them what it found; after that they hear from Watson when it moves,
+not on a schedule.
+
+If it has one, Watson has already reported on it, and the next pass stays
+quiet until the issue, its CI or the code moves. Answer now from the latest
+one; RUN_ID is its `id`, not the issue number:
+
+```bash
+/opt/hermes/.venv/bin/watson --home /var/lib/hermes/watson show RUN_ID --format json
+```
+
+Tell them what it found in their words, and that the next text comes when the
+issue, its CI or the code moves.
 
 ## 6. Change the repository, login or language
 
@@ -155,16 +166,17 @@ clearly switched.
 
 The cycle messages the owner without you, so you may not have seen what they
 are answering. `status` has it: `actions[].kind` says what went out, and
-`last_cycle` is the pass behind it. Its `errors` are raw text, often in
-Portuguese: explain them, never paste them.
+`last_cycle` is the pass behind it. Its `errors`, like `issues[].last_error`,
+are raw text, often in Portuguese: explain them, never paste them.
 
 - `owner_setup_notice`: the setup works — the repository, the login and how
   many issues are open. With none open it asks them to confirm the login; a
   corrected one goes through `config --assignee`.
 - `owner_sync_notice`: GitHub refused, and no issue is checked until that is
   fixed. The `sync` entry in `last_cycle.errors` ends in the HTTP status:
-  - 401: access expired or was revoked. Run `github connect`: it checks again,
-    answers `reconnect`, and the next run gives a new code (section 1).
+  - 401: access expired or was revoked. Run `github connect` (section 1): it
+    gives a new code, or answers `reconnect` first when root still held the
+    old token, and the next run gives the code.
   - 403: permission or rate limit. The next pass tries again by itself; if it
     lasts, send `github.install_url` and mention an organization admin.
   - 404: the name is wrong, or Watson Triage is not installed on it. Check the
@@ -174,10 +186,9 @@ Portuguese: explain them, never paste them.
   - 422: the login is not valid. Propose `github.login` and save the right one
     with `config --assignee`.
 - `owner_stuck_notice`: some numbers failed twice in a row and are retried less
-  often, from ten minutes up to once a day. Say why from `last_cycle.errors` or
-  `runs[].error`, and when from `issues[].retry_at`. A pull request, a number
-  that does not exist or an issue too big to investigate are the usual causes;
-  offer `untrack`.
+  often. Say why from `issues[].last_error` (or `runs[].error`), and when from
+  `issues[].retry_at`. A pull request, a number that does not exist or an issue
+  too big to investigate are the usual causes; offer `untrack`.
 - `owner_workflow_notice`: an issue update; nothing to fix.
 
 ## 8. What Watson can do

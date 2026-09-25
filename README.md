@@ -42,8 +42,10 @@ Then text the line. Watson sends you a code to connect GitHub, asks for the
 repository and the assignee, and runs a cycle every ten minutes.
 
 **It never takes a GitHub token, and refuses if you offer one.** You approve
-the Watson Triage GitHub App, read-only, by typing that code at github.com, and
-root inside the container keeps the tokens where the agent cannot reach them.
+the Watson Triage GitHub App, read-only, by typing that code at github.com.
+Root inside the container keeps the refresh token where the agent cannot reach
+it; each pass gets only the eight-hour access token, which the agent's uid can
+read while the pass runs.
 [docs/INSTALL.md](docs/INSTALL.md#1-connect-github-in-chat) owns that
 contract. What the image is and what it deliberately does not own is in
 [docs/cloud-variant.md](docs/cloud-variant.md).

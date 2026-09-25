@@ -69,10 +69,14 @@ The residuals this page will not overstate away:
   chat can start a device flow of its own -- with the same public client id, or
   with `gh auth login` and gh's own OAuth app, which asks for write scopes --
   and ask the owner to type the code; the token then lands in the model's
-  context. Nothing here closes that in code, since `gh` and `curl` are in the
-  image for the cycle's own use. The owner does: a code is approved only right
-  after asking Watson to connect, and only for Watson Triage asking for
-  read-only access. The skill and INSTALL.md both say so.
+  context. An issue update's model-written summary can carry a stranger's
+  Watson Triage code too, prompt-injected through an issue comment, and
+  GitHub's page then looks exactly right. Nothing here closes that in code,
+  since `gh` and `curl` are in the image for the cycle's own use. The owner
+  does: a code is approved only right after asking Watson to connect, and only
+  when the page names Watson Triage. The name cannot tell a stranger's code
+  from the owner's, since both use the same client id, so the timing is the
+  check that holds. The skill and INSTALL.md both say so.
 
 Two things on the hosted path are not verified yet: that its `PLOW_API_BASE` is
 `https`, which every Plow call here requires, and that `/var/lib/watson-github`
