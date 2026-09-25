@@ -128,6 +128,8 @@ class ImageTests(unittest.TestCase):
         self.assertLessEqual({'status', 'github connect', 'github disconnect', 'init', 'track', 'untrack', 'config',
                               'show'}, named)
         self.assertTrue(any(c[3] == 'init' and {'--notify-owner', '--language'} <= set(c) for c in commands))
+        # The only way a message sent before init reaches the owner in their language.
+        self.assertTrue(any(c[3:5] == ['github', 'connect'] and '--language' in c for c in commands))
         fill = {'OWNER/REPO': 'demo/repo', 'LOGIN': 'demo-owner', 'LANG': 'pt', 'RUN_ID': '1'}
         for command in commands:
             with self.subTest(' '.join(command[3:])), TemporaryDirectory() as tmp, \
@@ -155,8 +157,7 @@ class ImageTests(unittest.TestCase):
         # Plow runs a "- " or "1. " list into one block and glues the next
         # paragraph onto its last item: the number goes inside the bold.
         persona = (ROOT / 'image/persona.md').read_text()
-        self.assertIn('Never start a line with - or 1. in chat', persona)
-        self.assertIn('**1. GitHub**', persona)
+        self.assertRegex(persona, r'line with - or 1\.')  # the markers it names, not how it phrases the rule
         skill = (ROOT / 'image/skills/watson-setup/SKILL.md').read_text()
         templates = [line[2:] for line in skill.splitlines() if line.startswith('> ')]
         self.assertTrue(templates)

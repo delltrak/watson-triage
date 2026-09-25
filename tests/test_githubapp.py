@@ -20,6 +20,7 @@ from watson import cli, githubapp
 from watson.core import WatsonError, private_json
 from watson.githubapp import App, describe, request
 from watson.workflow import NOTICE
+from test_cycle_safety import Owner
 from test_watson import CONFIG
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -455,18 +456,16 @@ class AnnounceTests(unittest.TestCase):
         folder = TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.root = Path(folder.name)
-        self.home, self.status, self.sent, self.chats = self.root / 'watson', self.root / 'run' / 'status.json', [], 0
+        self.home, self.status, self.chats = self.root / 'watson', self.root / 'run' / 'status.json', 0
         test = self
 
-        class Owner:
+        class Counting(Owner):  # every look-up of the chat is a Plow call: a notice already told must cost none
             def owner_chat(self):
                 test.chats += 1
-                return 'chat'
-
-            def send(self, chat, body, media=None):
-                test.sent.append(body)
-                return {'message_uid': f'm{len(test.sent)}', 'chat_uid': chat}
-        for target, value in (('watson.workflow.Plow', mock.Mock(**{'from_config.return_value': Owner()})),
+                return super().owner_chat()
+        owner = Counting()
+        self.sent = owner.sent
+        for target, value in (('watson.workflow.Plow', mock.Mock(**{'from_config.return_value': owner})),
                               ('watson.workflow.read_status', partial(githubapp.read_status, self.status))):
             patcher = mock.patch(target, value)
             patcher.start()
@@ -514,6 +513,32 @@ class AnnounceTests(unittest.TestCase):
         self.connected(300.0)
         self.announce()
         self.assertEqual(self.sent, [reconnected, reconnected])
+        # After init the saved language decides, whatever the chat connected in.
+        private_json(self.home / 'connect.json', {'language': 'pt'})
+        private_json(self.home / 'config.json', {**CONFIG, 'notify_owner': True, 'language': 'en'})
+        self.connected(400.0)
+        self.announce()
+        self.assertEqual(self.sent[2:], [reconnected])
+
+    def test_every_announcement_names_what_it_is_about_in_both_languages(self):
+        # Each text is formatted and read here: a mistyped placeholder, or one the
+        # text drops, would otherwise show up only in the owner's chat.
+        install = 'https://github.com/apps/watson-triage/installations/new'
+        cases = [(False, language, names) for language in ('en', 'pt')
+                 for names in ((), ('octo/a',), ('octo/a', 'octo/b'))]
+        cases += [(True, language, ()) for language in ('en', 'pt')]
+        for at, (configured, language, names) in enumerate(cases, 1):
+            with self.subTest(configured=configured, language=language, repositories=len(names)):
+                if configured:
+                    private_json(self.home / 'config.json', {**CONFIG, 'notify_owner': True, 'language': language})
+                else:
+                    private_json(self.home / 'connect.json', {'language': language})
+                self.connected(float(at), *names)
+                self.announce()
+                for expected in ('octocat', *names, *(() if names or configured else (install,))):
+                    self.assertIn(expected, self.sent[-1])
+                self.assertEqual('conectado' in self.sent[-1], language == 'pt')
+        self.assertEqual(len(self.sent), len(cases))
 
     def test_a_list_github_would_not_give_is_waited_for_not_announced_as_nothing_installed(self):
         self.publish('connected', login='octocat', connected_at=100.0)  # root's listing failed: no repositories at all
