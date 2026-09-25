@@ -93,7 +93,9 @@ class FlowTests(unittest.TestCase):
             plow.from_config.return_value = FakePlow()
             outcome = cycle(self.home, model=Model(), github=FakeGitHub(), writer=writer)
 
-        self.assertTrue(sent, 'the comment failure suppressed the owner notification')
+        # The issue's own update: the setup confirmation reaches the same chat.
+        self.assertTrue([b for b in sent if b.startswith('Watson · #7')],
+                        'the comment failure suppressed the owner notification')
         self.assertTrue(outcome['errors'], 'the comment failure was swallowed')
 
     def setUp(self):

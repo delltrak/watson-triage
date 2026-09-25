@@ -3,22 +3,28 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
 from contextlib import nullcontext
 from pathlib import Path
 
 from .analysis import PlowInference, render, triage
-from .core import Store, WatsonError, load_config, private_json, repo_name
+from .core import Store, WatsonError, load_config, login, now, private_json, repo_name
 from .delivery import Plow, deliver
 from .speech import generate_voice
 from .github import GitHub
 
 
+def last_sync(home):
+    marker = Path(home) / 'baseline.json'
+    return json.loads(marker.read_text()) if marker.exists() else {}
+
+
 def sync(store, github, config):
     repo = config['repository']
-    marker = store.home / 'baseline.json'
-    baseline = marker.exists()
+    # A baseline belongs to one repository and login: after `config` changes
+    # either, the next pass records a new one instead of tracking a backlog.
+    previous = last_sync(store.home)
+    baseline = (previous.get('repository'), previous.get('assignee')) == (repo, config['assignee'])
     assigned = github.assigned(repo, config['assignee'])
     new = []
     for issue in assigned:
@@ -32,7 +38,7 @@ def sync(store, github, config):
     store.db.executemany('UPDATE issues SET assigned=1 WHERE repo=? AND number=?',
                         [(repo, item['number']) for item in assigned])
     store.db.commit()
-    private_json(marker, {'repository': repo, 'assignee': config['assignee']})
+    private_json(store.home / 'baseline.json', {'repository': repo, 'assignee': config['assignee'], 'at': now()})
     return {'assigned_open': len(assigned), 'newly_tracked': new, 'initial_baseline': not baseline}
 
 
@@ -51,6 +57,9 @@ def main(argv=None):
     for cmd in ('track', 'untrack', 'triage'):
         sub.add_parser(cmd).add_argument('number', type=int)
     sub.add_parser('sync')
+    conf = sub.add_parser('config', help='Change the repository or login of a configured install.')
+    conf.add_argument('--repo')
+    conf.add_argument('--assignee')
     sub.add_parser('status')
     sub.add_parser('cycle', help='Rodada completa com efeitos explicitamente configurados.')
     access = sub.add_parser('access', help='Guardar acesso de teste localmente; nunca publicar na issue.')
@@ -102,15 +111,14 @@ def main(argv=None):
             serve(args.home)
             return 0
         store = Store(args.home)
-        # One-row writes and reads do not wait for a pass, which holds the lock
-        # for minutes: "track 123" mid-pass used to fail in chat.
-        with nullcontext() if args.command in {'track', 'untrack', 'status'} else store.lock():
+        # The owner's commands do not wait for a pass, which holds the lock for
+        # minutes: "track 123" mid-pass used to fail in chat. A running pass
+        # finishes on the config it loaded.
+        with nullcontext() if args.command in {'track', 'untrack', 'status', 'config'} else store.lock():
             if args.command == 'init':
                 if (args.home / 'config.json').exists():
-                    raise WatsonError('Esta instalação já foi configurada; use outra pasta para outro repositório.')
-                if not re.fullmatch(r'[A-Za-z0-9-]{1,39}', args.assignee):
-                    raise WatsonError('Usuário GitHub inválido.')
-                config = {'repository': repo_name(args.repo), 'assignee': args.assignee,
+                    raise WatsonError('Already configured; use watson config to change the repository or login.')
+                config = {'repository': repo_name(args.repo), 'assignee': login(args.assignee),
                           'related_repositories': [repo_name(r) for r in args.related],
                           'model': args.model, 'delivery': args.delivery,
                           'notify_owner': args.notify_owner,
@@ -127,6 +135,15 @@ def main(argv=None):
                     output = {'number': args.number, 'tracked': args.command == 'track'}
                 elif args.command == 'sync':
                     output = sync(store, github, config)
+                elif args.command == 'config':
+                    if args.repo is None and args.assignee is None:
+                        raise WatsonError('Nothing to change: give --repo, --assignee or both.')
+                    if args.repo is not None:
+                        config['repository'] = repo_name(args.repo)
+                    if args.assignee is not None:
+                        config['assignee'] = login(args.assignee)
+                    private_json(args.home / 'config.json', config)
+                    output = {'config': config}
                 elif args.command == 'triage':
                     # Built here, not above: `status`, `show`, `sync`, `track`,
                     # `voice` and `deliver` need no inference, and constructing
@@ -155,7 +172,9 @@ def main(argv=None):
                         if fresh['state'] == 'closed':
                             store.track(config['repository'], row['number'], False)
                 elif args.command == 'status':
-                    output = {'config': config, **store.history()}
+                    last = args.home / 'last-cycle.json'
+                    output = {'config': config, 'last_cycle': json.loads(last.read_text()) if last.exists() else None,
+                              **store.history()}
                 elif args.command in {'show', 'voice'}:
                     run = store.run(args.run_id)
                     if run['status'] != 'complete':

@@ -32,6 +32,12 @@ def repo_name(value):
     return value
 
 
+def login(value):
+    if not re.fullmatch(r'[A-Za-z0-9-]{1,39}', value):
+        raise WatsonError('Invalid GitHub login.')
+    return value
+
+
 def safe_source(path):
     parts = Path(path).parts
     return (bool(parts) and not path.startswith('/') and '..' not in parts

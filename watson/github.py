@@ -9,6 +9,14 @@ from urllib.parse import quote
 from .core import WatsonError, repo_name, safe_source
 
 
+class GitHubError(WatsonError):
+    """A refused read and GitHub's HTTP status, the difference between a wrong
+    repository (404), a wrong login (422) and revoked access (401)."""
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
+
+
 class GitHub:
     """Read-only interface. No arbitrary URL, shell string or write method."""
     def __init__(self, repositories, run=subprocess.run):
@@ -24,7 +32,11 @@ class GitHub:
         result = self.run(['gh', 'api', '--method', 'GET', f'repos/{repo}/{resource}'],
                           capture_output=True, text=True, timeout=90)
         if result.returncode:
-            raise WatsonError(f'Não foi possível ler {repo}/{resource.split("?")[0]} no GitHub.')
+            # Only the status is kept: gh's output quotes whatever GitHub sent.
+            code = re.search(r'\(HTTP (\d{3})\)', result.stderr)
+            status = int(code[1]) if code else None
+            raise GitHubError(f'Não foi possível ler {repo}/{resource.split("?")[0]} no GitHub'
+                              + (f' (HTTP {status}).' if status else '.'), status)
         return json.loads(result.stdout)
 
     def pages(self, repo, resource):

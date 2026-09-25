@@ -5,7 +5,7 @@ from pathlib import Path
 from .analysis import PlowInference, object_schema, STRING, triage
 from .browser import run_browser, credentials_path
 from .cases import Cases
-from .core import WatsonError, Store, digest, load_config, now, owner_language
+from .core import WatsonError, Store, digest, load_config, now, owner_language, private_json
 from .delivery import Plow
 from .github import GitHub
 from .writes import GitHubWriter, MARKER
@@ -58,12 +58,31 @@ def compose(model, issue, result, state, validation, private_channel, previous):
 
 
 # What the cycle tells the owner on its own. Only this text and validated values
-# (numbers) go out this way, never exception text: the chat explains details.
+# (repository, login, numbers) go out this way, never exception text: the chat
+# explains details from `watson status`.
 NOTICE={
     'en':{'stuck':'Watson: I could not check {numbers} twice in a row, so I will retry them less often. '
-                  'Ask me what went wrong, or tell me to stop tracking them.'},
+                  'Ask me what went wrong, or tell me to stop tracking them.',
+          'set_up':'Watson is set up: watching {repo} for issues assigned to {assignee}, {count} open now. '
+                   'Those I look at when you name one; issues assigned from now on I pick up on my own.',
+          'no_issues':'\n\nIf {assignee} is not the right GitHub login, tell me the right one.',
+          'refused':{401:"GitHub refused Watson's access to {repo}; it expired or was revoked. Reply and I will reconnect it. "
+                         'Until then I am not checking issues.',
+                     403:'GitHub denied access to {repo} (permission or rate limit). Until then I am not checking issues.',
+                     404:'GitHub cannot find {repo}, or Watson cannot see it; a private repository needs the Watson Triage '
+                         'app installed. Reply and I will help. Until then I am not checking issues.',
+                     422:'GitHub says {assignee} is not a valid login; tell me the right one. Until then I am not checking issues.'}},
     'pt':{'stuck':'Watson: não consegui verificar {numbers} duas vezes seguidas, então vou tentar de novo com menos frequência. '
-                  'Me pergunte o que deu errado, ou peça para eu parar de acompanhá-las.'}}
+                  'Me pergunte o que deu errado, ou peça para eu parar de acompanhá-las.',
+          'set_up':'Watson configurado: acompanho {repo}, issues atribuídas a {assignee}, {count} abertas agora. '
+                   'Essas eu olho quando você me disser o número; as atribuídas daqui em diante eu pego sozinho.',
+          'no_issues':'\n\nSe {assignee} não for o login certo no GitHub, me diga o certo.',
+          'refused':{401:'O GitHub recusou o acesso do Watson a {repo}; ele expirou ou foi revogado. Responda e eu reconecto. '
+                         'Até lá não verifico issues.',
+                     403:'O GitHub negou acesso a {repo} (permissão ou limite de uso). Até lá não verifico issues.',
+                     404:'O GitHub não encontra {repo}, ou o Watson não consegue vê-lo; um repositório privado precisa do app '
+                         'Watson Triage instalado. Responda e eu ajudo. Até lá não verifico issues.',
+                     422:'O GitHub diz que {assignee} não é um login válido; me diga o certo. Até lá não verifico issues.'}}}
 
 
 def notify(store, channel, config, run_id, issue, result, state, validation):
@@ -108,15 +127,31 @@ def cycle(home, *, model=None, github=None, writer=None):
     model=model or PlowInference.from_config(home,config)
     writer=writer or GitHubWriter(config['repository'],enabled=config.get('github_comments',False))
     cases=Cases(store); outcome={'processed':[],'unchanged':[],'skipped':[],'errors':[]}
-    repo=config['repository']; login=config['assignee']; stuck=[]
+    repo=config['repository']; login=config['assignee']; stuck=[]; notice=NOTICE[owner_language(config)]
     try:
         with store.lock():
-            from .cli import sync
-            outcome['sync']=sync(store,github,config)
-            # A failing issue waits out its backoff, then queues by when it
-            # became due, so it can neither hold every slot nor starve.
-            tracked=store.db.execute('''SELECT number,explicit,checked FROM issues WHERE repo=? AND tracked=1
-                AND COALESCE(retry_at,'')<=? ORDER BY COALESCE(retry_at,checked,''),number''',(repo,now())).fetchall()
+            from .cli import last_sync, sync
+            try: outcome['sync']=sync(store,github,config)
+            except Exception as exc:
+                # Every issue would fail the same way, so none is read. A refusal
+                # is told once per stretch since the last good sync; a 5xx or a
+                # timeout passes by itself and is not worth a message.
+                outcome['errors'].append({'sync':str(exc)[:500]}); tracked=[]
+                status=getattr(exc,'status',None)
+                if status in notice['refused']:
+                    tell_owner(store,config,'owner_sync_notice',
+                               {'repo':repo,'assignee':login,'status':status,'since':last_sync(home).get('at')},
+                               notice['refused'][status].format(repo=repo,assignee=login))
+            else:
+                if outcome['sync']['initial_baseline']:
+                    count=outcome['sync']['assigned_open']
+                    tell_owner(store,config,'owner_setup_notice',{'repo':repo,'assignee':login},
+                               notice['set_up'].format(repo=repo,assignee=login,count=count)
+                               +('' if count else notice['no_issues'].format(assignee=login)))
+                # A failing issue waits out its backoff, then queues by when it
+                # became due, so it can neither hold every slot nor starve.
+                tracked=store.db.execute('''SELECT number,explicit,checked FROM issues WHERE repo=? AND tracked=1
+                    AND COALESCE(retry_at,'')<=? ORDER BY COALESCE(retry_at,checked,''),number''',(repo,now())).fetchall()
             for row in tracked[:config.get('cycle_limit',3)]:
                 number=row['number']
                 try:
@@ -211,6 +246,9 @@ def cycle(home, *, model=None, github=None, writer=None):
                     if store.failed(repo,number)==2: stuck.append([number,row['checked']])
             if stuck:
                 tell_owner(store,config,'owner_stuck_notice',{'repo':repo,'stuck':stuck},
-                           NOTICE[owner_language(config)]['stuck'].format(numbers=', '.join(f'#{n}' for n,_ in stuck)))
+                           notice['stuck'].format(numbers=', '.join(f'#{n}' for n,_ in stuck)))
     finally: store.db.close()
+    # The chat's view of the last pass (`watson status`): the JSON the service
+    # log gets, token-free.
+    private_json(home/'last-cycle.json',{'at':now(),**outcome})
     return outcome
