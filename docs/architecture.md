@@ -1,6 +1,6 @@
 # Workflow and trust boundaries
 
-GitHub collector → immutable source/CI evidence → Codex structured triage → persistent case → owner-approved browser scenario → localized comment and owner delivery.
+GitHub collector → immutable source/CI evidence → Plow structured triage → persistent case → owner-approved browser scenario → localized comment and owner delivery.
 
 Every issue is identified by repository + number. Case memory records current state, latest run, unresolved questions, previous state, author, source revision and validation evidence. Polling compares conversation, code revision, CI status, access-file revision and browser profile. A reply resumes the existing case; unchanged inputs produce no inference or repeated notification. Watson's own marked comments do not wake itself.
 

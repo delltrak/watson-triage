@@ -11,3 +11,5 @@ auth.json
 *.sqlite*
 *.db
 .DS_Store
+
+watson-github

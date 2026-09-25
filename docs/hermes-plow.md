@@ -46,13 +46,16 @@ mcp_servers:
     connect_timeout: 30
 ```
 
-O processo da ponte deve encontrar `gh` e `codex` autenticados. Esse exemplo não
-foi carregado em um gateway Hermes real. Não copiar o ambiente pessoal inteiro
-ou credenciais de escrita para dentro de uma imagem pública.
+O processo da ponte deve encontrar `gh` autenticado e uma credencial Plow para
+inferência -- `PLOW_API_BASE` e `HERMES_CUSTOM_PLOW_API_KEY` no ambiente, ou
+`plow_credential_file` no config, que é o que `PlowInference.from_config` lê.
+Não há mais `codex login`: o Codex deixou de ser o backend de inferência. Esse
+exemplo não foi carregado em um gateway Hermes real. Não copiar o ambiente
+pessoal inteiro ou credenciais de escrita para dentro de uma imagem pública.
 
 ## Estado do piloto
 
-O Watson usa Codex local e a API Plow diretamente. A ponte Hermes é opcional e ainda não foi validada em um gateway real.
+O Watson usa a inferência do Plow e a API Plow diretamente. A ponte Hermes é opcional e ainda não foi validada em um gateway real.
 
 - Login Plow, linha e entrega ao proprietário: validados.
 - Texto e vídeo reproduzível no iMessage: validados.
@@ -68,6 +71,4 @@ Uma instalação Hermes precisa configurar a ponte e a inferência separadamente
 - [Base e contrato para variantes](https://github.com/plow-pbc/plow-hermes-agent)
 - [Administração de agentes e login](https://github.com/plow-pbc/plow-agents)
 - [Plugin Plow e mídia](https://github.com/plow-pbc/hermes-plugin-plow)
-- [Runtime Codex no Hermes](https://hermes-agent.nousresearch.com/docs/user-guide/features/codex-app-server-runtime)
 - [Configuração MCP no Hermes](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp/)
-- [Autenticação Codex](https://learn.chatgpt.com/docs/auth)

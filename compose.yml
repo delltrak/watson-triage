@@ -1,0 +1,44 @@
+# Local run of this agent's image. `plow-agents deploy --local --line ln_xxx`
+# mints the credential into ./plow-credentials and brings this up.
+services:
+  agent:
+    build: .
+    environment:
+      # Which agent this is, for the base's Agent Index reporter. Without it the
+      # reporter stands down rather than guessing a name.
+      AGENT_ID: watson-delltrak
+    env_file:
+      - path: ./plow-credentials
+        required: false
+    volumes:
+      # The owner's GitHub token: the raw value, no KEY= prefix, root-owned
+      # 0600 under a root-owned directory. Mounted rather than passed through
+      # env_file so it never enters the container environment at all -- the
+      # gateway shares this container and has a shell, so anything in that
+      # environment is one `printenv` from the model. See docs/INSTALL.md.
+      #
+      # Long form with create_host_path: false, deliberately. The short
+      # `src:dst` form CREATES a missing source as a DIRECTORY, so a typo or a
+      # missed setup step produces a container whose token path is a directory
+      # and whose failure says nothing useful. This refuses to start instead.
+      - type: bind
+        source: /etc/watson/github
+        target: /opt/plow/watson-github
+        read_only: true
+        bind:
+          create_host_path: false
+      # The agent's home, kept across `up`/`down` for its sessions and setup.
+      # `docker compose down -v` starts this agent fresh, and is what an edit
+      # to SOUL.md needs before the agent sees it.
+      - agent-home:/var/lib/hermes
+    # Two things need to finish after SIGTERM. The gateway checkpoints, which its
+    # supervisor allows 30s for -- Docker's default 10s cuts that off and orphans
+    # the transcript lease. And an owner notification already in flight has
+    # `post_json`'s own 45s timeout; a SIGKILL inside that window leaves the action
+    # row on `sending`, because the handler that writes `unknown` never runs. 60s
+    # clears both, so the send either lands or times out into its own handler.
+    stop_grace_period: 60s
+    # No ports: the agent connects to Plow outbound.
+
+volumes:
+  agent-home:

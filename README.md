@@ -10,7 +10,7 @@ Built by [Deltrak](https://github.com/delltrak).
 
 Watson reads an issue, its conversation, relevant source files and GitHub Actions results. It remembers earlier investigations, asks the author for missing information in the issue's language, and resumes when they reply. Owner updates are in Brazilian Portuguese over Plow/iMessage.
 
-This is a local-first prototype using the user's existing Codex/ChatGPT session. It never merges PRs.
+This is a prototype. It never merges PRs. It runs two ways: locally on your own Mac, where browser validation and audio also work, or as a Plow cloud agent you text — under Docker Compose today, since the hosted deploy path cannot yet supply a GitHub credential. Both think through Plow's inference, so no local Codex or ChatGPT session is needed.
 
 ## What is implemented
 
@@ -25,13 +25,38 @@ This is a local-first prototype using the user's existing Codex/ChatGPT session.
 - iMessage text/video delivery to the verified owner of the configured Plow line.
 - Sol requested through ChatGPT Read Aloud, adapted from Deca. Native voice memo delivery is pending Plow support: [upstream issue #199](https://github.com/plow-pbc/hermes-plugin-plow/issues/199).
 - Explicit repair command: scoped changes, regression tests in a container without network or host credentials, and a draft PR. A new regression test must fail against the original source and pass with the fix. No merge operation exists.
-- Official Agent Index client pinned and bundled, with an adapter for measured Watson-only Codex usage.
+- Official Agent Index client pinned and bundled, with an adapter for measured Watson-only inference usage.
+- A Plow cloud image built `FROM` the pinned base: the same `cycle` on a ten-minute service, set up by the owner over chat.
 
-Browser validation is configured per issue. A human supplies the trusted test environment and login selectors. Scenarios may be supplied explicitly, or `auto_plan: true` lets Codex propose steps from the issue and controls actually observed after login. Generated selectors must match observed controls and the plan must contain an expected-result assertion. This bounded planner supports simple forms, not arbitrary website exploration. Without a browser profile, Watson performs static triage and requests missing information.
+Browser validation is configured per issue. A human supplies the trusted test environment and login selectors. Scenarios may be supplied explicitly, or `auto_plan: true` lets the model propose steps from the issue and controls actually observed after login. Generated selectors must match observed controls and the plan must contain an expected-result assertion. This bounded planner supports simple forms, not arbitrary website exploration. Without a browser profile, Watson performs static triage and requests missing information.
 
 ## Install
 
-Requires Python 3.11+, GitHub CLI, and Codex CLI. Browser recording requires the optional browser dependencies. Docker is needed only for isolated repair tests.
+### On Plow, under Compose
+
+```sh
+plow-agents deploy --local --line ln_xxx   # see docs/INSTALL.md for the token
+```
+
+Then text the line. Watson asks for the repository and the assignee, and runs a
+cycle every ten minutes.
+
+**The hosted `plow-agents deploy` path is not usable yet.** It injects only the
+`PLOW_*` variables, so the agent has no GitHub credential and the cycle stands
+down loudly rather than triaging. Until that is addressed, run Watson under
+Compose.
+
+**It will not take a GitHub token in chat, and refuses if you offer one.**
+`GH_TOKEN` is deploy-time input — [docs/INSTALL.md](docs/INSTALL.md#1-give-it-a-github-token--at-deploy-time-not-in-chat)
+owns that contract, including which path can supply it today. What the image is
+and what it deliberately does not own is in
+[docs/cloud-variant.md](docs/cloud-variant.md).
+
+### On your own machine
+
+Requires Python 3.11+, GitHub CLI, the [plow-agents CLI](https://github.com/plow-pbc/plow-agents) on your `PATH`, and a Plow credential for inference. Browser
+recording requires the optional browser dependencies. Docker is needed only for
+isolated repair tests.
 
 ```sh
 git clone https://github.com/delltrak/watson-triage.git
@@ -40,16 +65,31 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[browser]'
 .venv/bin/python -m playwright install chromium
 gh auth login
-codex login
+plow-agents mint ln_xxx --credential-file ./plow-credentials
+set -a; . ./plow-credentials; set +a
 .venv/bin/watson --home .watson init --repo owner/repo --assignee your-login --delivery text
 .venv/bin/watson --home .watson sync
 .venv/bin/watson --home .watson track 123
 .venv/bin/watson --home .watson cycle
 ```
 
-The initial sync records a baseline without processing the entire backlog. Explicitly track existing issues. Later assignments are tracked automatically. `cycle` performs one bounded round; use a local supervisor/scheduler to run it periodically. The owner's pilot uses a Codex heartbeat; installation does not silently install a daemon.
+Inference reads `PLOW_API_BASE` and `HERMES_CUSTOM_PLOW_API_KEY` (falling back
+to `PLOW_AGENT_TOKEN`) from the environment, which is what sourcing the minted
+credential above supplies — or `plow_credential_file` from the config below, which
+delivery already uses. Without one of those, the first investigation fails with
+`Sem credencial de inferência`. There is no `codex login` step: Codex was the
+inference backend until this fork replaced it, and nothing in Watson shells out
+to it any more.
 
-By default, GitHub comments, owner delivery and repairs are disabled. Enable only the capabilities you want in the private `.watson/config.json`:
+The initial sync records a baseline without processing the entire backlog.
+Explicitly track existing issues. Later assignments are tracked automatically.
+`cycle` performs one bounded round; locally, use a supervisor or scheduler to
+run it periodically. Installation does not silently install a daemon — on Plow,
+the image's own `watson-cycle` service is that scheduler, and it is visible in
+the Dockerfile.
+
+By default, GitHub comments, owner delivery and repairs are disabled. Enable
+only the capabilities you want in the private `.watson/config.json`:
 
 ```json
 {
@@ -92,7 +132,7 @@ Opt in with a `repair` configuration containing `enabled: true` and an explicit 
 .venv/bin/watson --home .watson repair 123
 ```
 
-A reproduced failure is required. Source changes are proposed by Codex without tool access, then checked against the allowlist. Tests run with no network, a read-only source mount, no capabilities and no host credentials. A successful proposal creates a new branch and draft PR against the observed base revision. PR creation is explicit; `cycle` does not automatically fix every issue. No automatic merge or deployment.
+A reproduced failure is required. Source changes are proposed by the model, which has no tool access, then checked against the allowlist. Tests run with no network, a read-only source mount, no capabilities and no host credentials. A successful proposal creates a new branch and draft PR against the observed base revision. PR creation is explicit; `cycle` does not automatically fix every issue. No automatic merge or deployment.
 
 ## Audio
 
@@ -100,15 +140,15 @@ A reproduced failure is required. Source changes are proposed by Codex without t
 .venv/bin/watson --home .watson voice 1 --output summary.mp3
 ```
 
-The ChatGPT internal Read Aloud endpoint receives `voice=sol` and Portuguese text. It uses the existing file-backed Codex session, without a public API key. This is an internal endpoint and may change or ignore voice selection. It does not refresh tokens and does not support keychain-only authentication. The speech text is sent to ChatGPT; credentials are not copied into memory. An error never silently switches to macOS speech.
+The ChatGPT internal Read Aloud endpoint receives `voice=sol` and Portuguese text. It uses a file-backed ChatGPT session at `${CODEX_HOME:-~/.codex}/auth.json`, without a public API key. This is the one path that still wants that file; it is unrelated to inference, which goes through Plow, and it is desktop-only: it is never reached on a cloud agent. This is an internal endpoint and may change or ignore voice selection. It does not refresh tokens and does not support keychain-only authentication. The speech text is sent to ChatGPT; credentials are not copied into memory. An error never silently switches to macOS speech.
 
 Native iMessage voice bubbles need a Plow backend operation that is not in its published API as inspected on 2026-09-15. `audio_mode=native` blocks file substitution. If the owner explicitly accepts regular files, `audio_mode=attachment` enables the legacy attachment delivery. Text/video workflow updates remain usable while native voice is pending.
 
 ## Agent Index
 
-The bundled official client is unmodified, pinned at `87901f8b182a8a7c65ee3dd7267f8f835ee2a545` (Apache-2.0; included NOTICE/license). Watson records every measured Codex invocation separately, including unsuccessful attempts that returned usage. Cached input is separated from total input to avoid double-counting.
+The bundled official client is unmodified, pinned at `87901f8b182a8a7c65ee3dd7267f8f835ee2a545` (Apache-2.0; included NOTICE/license). Watson records every measured inference invocation separately, including unsuccessful attempts that returned usage. OpenAI's counter names are translated into the ones this table stores (`normalize_usage`); untranslated, every row would land as zero. Cached input is separated from total input to avoid double-counting.
 
-Use an explicit model in `init --model YOUR_CODEX_MODEL` for reliable model attribution. No model name is guessed when missing. The compatibility `session_model_usage` table contains real Watson invocation counts; it is not a claim that Watson runs Hermes. The client runs with a separate home so personal Codex histories are not reported as Watson work. Do not configure an external agentsview index in that isolated home.
+`init --model` overrides the default (`z-ai/glm-5.2`); whichever applies is what usage is recorded under, so attribution always names a real model. The compatibility `session_model_usage` table contains real Watson invocation counts; it is not a claim that Watson runs Hermes — the registered runtime is Plow, which is what Watson actually invokes. The client runs with a separate home so unrelated histories are not reported as Watson work. Do not configure an external agentsview index in that isolated home.
 
 Set `agent_index_id` and `agent_repository_url` in private configuration, then:
 

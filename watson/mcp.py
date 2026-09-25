@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from .analysis import Codex, triage
+from .analysis import PlowInference, triage
 from .core import Store, WatsonError, load_config
 from .github import GitHub
 
@@ -15,7 +15,7 @@ TOOLS = [
      'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}},
     {'name': 'watson_investigate',
      'description': 'Investigar uma issue no repositório configurado, com código e evidências atuais. '
-                    'Pode consumir a assinatura Codex. Não envia mensagens nem escreve no GitHub.',
+                    'Usa a inferência do Plow. Não envia mensagens nem escreve no GitHub.',
      'inputSchema': {'type': 'object', 'properties': {'number': {'type': 'integer', 'minimum': 1}},
                      'required': ['number'], 'additionalProperties': False}},
 ]
@@ -56,7 +56,7 @@ def dispatch(home, message):
                     result = store.history()
                 else:
                     github = GitHub([config['repository']] + config['related_repositories'])
-                    result = triage(store, github, Codex(home, config.get('model')), config, arguments['number'])
+                    result = triage(store, github, PlowInference.from_config(home, config), config, arguments['number'])
             return {'content': [{'type': 'text', 'text': json.dumps(result, ensure_ascii=False)}], 'isError': False}
         finally:
             store.db.close()
