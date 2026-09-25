@@ -70,7 +70,8 @@ The mechanism is the Watson Triage GitHub App's device flow, split by uid:
   otherwise returns only at the tick, so asking again buys no pass. The service
   then runs `watson github announce` as the agent, with no token: from the
   status, it tells the owner which repositories they can pick from, the install
-  link, or on a configured install that Watson is back on its repository, once
+  link, or on a configured install only that GitHub is reconnected (whether
+  the app can still read the repository is for the next pass to find), once
   per login and date (`claim_action`), in NOTICE text and validated names only.
   Before `init` there is no `notify_owner` to ask and the owner is in the chat
   setting up, so it goes out regardless; after, `notify_owner` decides. The

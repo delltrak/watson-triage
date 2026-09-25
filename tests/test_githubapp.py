@@ -486,14 +486,18 @@ class AnnounceTests(unittest.TestCase):
         self.assertEqual(self.sent, [NOTICE['en']['connected_none'].format(
             login='octocat', url='https://github.com/apps/watson-triage/installations/new')])
 
-    def test_a_configured_install_hears_it_is_back_on_its_repository_unless_it_is_quiet(self):
-        for at, notify, told in ((100.0, False, []),
-                                 (200.0, True, [NOTICE['en']['reconnected'].format(login='octocat', repo='demo/repo')])):
+    def test_a_configured_install_hears_it_is_reconnected_unless_it_is_quiet(self):
+        reconnected = NOTICE['en']['reconnected'].format(login='octocat')
+        for at, notify, told in ((100.0, False, []), (200.0, True, [reconnected])):
             with self.subTest(notify_owner=notify):
                 private_json(self.home / 'config.json', {**CONFIG, 'notify_owner': notify})
                 self.connected(at, 'octo/a', 'octo/b')
                 self.announce()
                 self.assertEqual(self.sent, told)
+        # Nothing about the repository: the app may have been removed from it meanwhile, and the next pass says what it finds.
+        self.connected(300.0)
+        self.announce()
+        self.assertEqual(self.sent, [reconnected, reconnected])
 
     def test_nothing_is_said_but_for_a_dated_connection(self):
         for state, at in (('connected', None), ('pending', 100.0), ('disconnected', None)):

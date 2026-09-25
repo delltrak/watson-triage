@@ -78,7 +78,7 @@ NOTICE={
           'connected_one':'Watson: GitHub is connected as {login}, and Watson Triage can read {repo}. Shall I watch it?',
           'connected_none':'Watson: GitHub is connected as {login}. Now install Watson Triage on the repository I should '
                            'watch:\n\n{url}\n\nTell me when you have installed it.',
-          'reconnected':'Watson: GitHub is reconnected as {login}, and I am back on {repo}.',
+          'reconnected':'Watson: GitHub is reconnected as {login}.',
           'refused':{401:"GitHub refused Watson's access to {repo}; it expired or was revoked. Reply and I will reconnect it. "
                          'Until then I am not checking issues.',
                      403:'GitHub denied access to {repo} (permission or rate limit). Until then I am not checking issues.',
@@ -99,7 +99,7 @@ NOTICE={
           'connected_one':'Watson: GitHub conectado como {login}, e o Watson Triage consegue ler {repo}. Acompanho esse?',
           'connected_none':'Watson: GitHub conectado como {login}. Agora instale o Watson Triage no repositório que devo '
                            'acompanhar:\n\n{url}\n\nMe avise quando tiver instalado.',
-          'reconnected':'Watson: GitHub reconectado como {login}, e voltei a acompanhar {repo}.',
+          'reconnected':'Watson: GitHub reconectado como {login}.',
           'refused':{401:'O GitHub recusou o acesso do Watson a {repo}; ele expirou ou foi revogado. Responda e eu reconecto. '
                          'Até lá não verifico issues.',
                      403:'O GitHub negou acesso a {repo} (permissão ou limite de uso). Até lá não verifico issues.',
@@ -154,7 +154,7 @@ def announce(home):
     chosen=home/'connect.json'  # the language the chat connected in, until init saves one
     words=NOTICE[owner_language({**(json.loads(chosen.read_text()) if chosen.exists() else {}),**config})]
     login=valid_login(github['login']); repos=[repo_name(r['full_name']) for r in github.get('repositories',[])]
-    if configured: body=words['reconnected'].format(login=login,repo=config['repository'])
+    if configured: body=words['reconnected'].format(login=login)
     elif len(repos)==1: body=words['connected_one'].format(login=login,repo=repos[0])
     elif repos: body=words['connected_list'].format(login=login,repos=''.join(f'\n\n**{n}. {r}**' for n,r in enumerate(repos,1)))
     else: body=words['connected_none'].format(login=login,url=github['install_url'])

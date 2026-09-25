@@ -195,7 +195,8 @@ are raw text, often in Portuguese: explain them, never paste them.
 
 - `owner_github_notice`: GitHub just connected. Before setup it listed the
   repositories by number, proposed the only one, or sent the install link; on
-  a configured install it said Watson is back on the repository. Before setup
+  a configured install it said only that GitHub is reconnected: whether Watson
+  Triage can still read the repository is for the next pass to find. Before setup
   `status` has no `actions`: a bare number from the owner answers this
   message, and it is that position in `github.repositories` (section 2).
 - `owner_setup_notice`: the setup works — the repository, the login and how
@@ -268,4 +269,6 @@ https://github.com/settings/apps/authorizations.
 `queued: true`: a pass is running, and the disconnect happens when it ends,
 within minutes; say so. The repository, login and tracked numbers stay as they
 are, and Watson does not report GitHub's refusal while it is disconnected. When
-they connect again it picks up where it was, and tells them so.
+they connect again it picks up where it was, and texts them that GitHub is
+reconnected; if the app is no longer installed on the repository, the next pass
+says so.
