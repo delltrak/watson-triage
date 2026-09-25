@@ -14,6 +14,7 @@ leaves the root process.
 from __future__ import annotations
 
 import fcntl
+import http.client
 import json
 import os
 import stat
@@ -33,6 +34,8 @@ REQUEST = 'watson-github.connect'
 TOKEN_URL = 'https://github.com/login/oauth/access_token'
 # A refresh retires the access token it replaces, so it happens between passes,
 # never under one, and early enough that no pass outlives the token it was given.
+# A refresh lost in flight -- killed after GitHub answers, before the new pair
+# is saved -- leaves only a retired pair, and the owner connects once more.
 REFRESH_BEFORE_S = 2 * 3600
 # Older than this, a request is a leftover from before a restart, not an owner waiting.
 REQUEST_TTL_S = 600
@@ -155,7 +158,7 @@ class App:
         if asked and not tokens:
             try:
                 tokens = self.device_flow()
-            except (OSError, ValueError, KeyError, WatsonError) as exc:
+            except (OSError, ValueError, KeyError, WatsonError, http.client.HTTPException) as exc:
                 self.log(f'device flow failed ({type(exc).__name__})')
                 self.publish('failed', detail='github_unreachable')
         if not tokens:
@@ -182,7 +185,7 @@ class App:
                 self.forget('github_refused')
                 return None
             self.log(f'GitHub answered {exc.code}; keeping the token')
-        except (OSError, ValueError, KeyError, WatsonError) as exc:
+        except (OSError, ValueError, KeyError, WatsonError, http.client.HTTPException) as exc:
             self.log(f'could not check the token ({type(exc).__name__}); keeping it')
         if tokens['expires_at'] and tokens['expires_at'] < self.clock() + 60:
             return None
@@ -221,8 +224,10 @@ def connect(*, status=STATUS, requests=REQUESTS, wait_s=30, sleep=time.sleep, cl
         while clock() - asked < wait_s and read_status(status).get('updated_at', 0) <= asked:
             sleep(1)
         current = read_status(status)
-        if current.get('updated_at', 0) <= asked:
-            current = {**current, 'queued': True}  # a pass is running; root answers when it ends
+        # A pass is running, and root answers when it ends. With no status at
+        # all, root has never answered here, and the service log says why.
+        if current and current.get('updated_at', 0) <= asked:
+            current = {**current, 'queued': True}
     return describe(current, clock=clock)
 
 

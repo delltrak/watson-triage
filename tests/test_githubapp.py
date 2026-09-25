@@ -1,4 +1,5 @@
 import fcntl
+import http.client
 import io
 import json
 import os
@@ -151,9 +152,14 @@ class GitHubAppTest(unittest.TestCase):
             self.assertEqual(self.github.script, [])
 
     def test_github_unreachable_during_connect_is_an_answer_not_a_crash(self):
-        self.ask()
-        self.assertIsNone(self.app(('POST', DEVICE_URL, urllib.error.URLError('offline'))).prepare())
-        self.assertEqual((self.published()['state'], self.published()['detail']), ('failed', 'github_unreachable'))
+        dropped = http.client.IncompleteRead(b'{"err')  # the connection closed mid-answer
+        for script in ([('POST', DEVICE_URL, urllib.error.URLError('offline'))],
+                       [DEVICE, ('POST', githubapp.TOKEN_URL, dropped)]):
+            with self.subTest(error=type(script[-1][2]).__name__):
+                self.ask()
+                self.assertIsNone(self.app(*script).prepare())
+                self.assertEqual((self.published()['state'], self.published()['detail']),
+                                 ('failed', 'github_unreachable'))
 
     def test_no_request_and_no_token_is_disconnected_and_calls_nothing(self):
         self.assertIsNone(self.app().prepare())
@@ -225,10 +231,12 @@ class GitHubAppTest(unittest.TestCase):
         self.assertFalse((self.store / 'token.json').exists())
 
     def test_github_unreachable_keeps_the_token_and_hands_it_out_while_it_lasts(self):
-        for left, handed in ((3600, 'ghu_OLD'), (30, None)):
-            with self.subTest(left=left):
+        for left, handed, error in ((3600, 'ghu_OLD', urllib.error.URLError('down')), (3600, 'ghu_OLD', refused(502)),
+                                    (3600, 'ghu_OLD', http.client.IncompleteRead(b'')),
+                                    (30, None, urllib.error.URLError('down'))):
+            with self.subTest(left=left, error=type(error).__name__):
                 self.save(left)
-                offline = ('POST', githubapp.TOKEN_URL, urllib.error.URLError('down'))
+                offline = ('POST', githubapp.TOKEN_URL, error)
                 self.assertEqual(self.app(offline).prepare(), handed)
                 self.assertEqual(self.token()['refresh_token'], 'ghr_OLD')  # kept for the next tick
 
@@ -268,6 +276,9 @@ class GitHubAppTest(unittest.TestCase):
         self.assertEqual((busy['queued'], request.exists()), (True, True))
         with self.assertRaises(WatsonError):
             connect(status=self.status, requests=self.root / 'missing', wait_s=0, clock=self.clock)
+        self.status.unlink()  # root has never answered here: not a pass to wait for
+        self.assertEqual(connect(status=self.status, requests=self.requests, wait_s=0, clock=self.clock),
+                         {'state': 'unknown'})
 
     def test_the_chat_connects_before_init_without_the_store_and_status_shows_github(self):
         home = self.root / 'watson'

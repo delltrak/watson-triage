@@ -235,12 +235,17 @@ class CycleSafetyTests(unittest.TestCase):
         self.assertEqual(self.run_cycle(FakeGitHub())['sync']['newly_tracked'], [7])
 
     def test_github_errors_carry_the_status_and_nothing_else_gh_printed(self):
-        def run(args, **kwargs):
-            return subprocess.CompletedProcess(args, 1, '{"message":"Bad credentials"}', 'gh: Bad credentials (HTTP 401)\n')
-        with self.assertRaises(GitHubError) as caught:
-            GitHub(['demo/repo'], run=run).get('demo/repo', 'issues?state=open')
-        self.assertEqual(caught.exception.status, 401)
-        self.assertEqual(str(caught.exception), 'Não foi possível ler demo/repo/issues no GitHub (HTTP 401).')
+        # gh exits 4, printing no status, when it has no credential at all: root dropped one GitHub refused.
+        for code, out, err in ((1, '{"message":"Bad credentials"}', 'gh: Bad credentials (HTTP 401)\n'),
+                               (4, '', 'To get started with GitHub CLI, please run:  gh auth login\n'
+                                       'Alternatively, populate the GH_TOKEN environment variable with a GitHub API '
+                                       'authentication token.\n')):
+            with self.subTest(exit=code):
+                run = lambda args, **kwargs: subprocess.CompletedProcess(args, code, out, err)
+                with self.assertRaises(GitHubError) as caught:
+                    GitHub(['demo/repo'], run=run).get('demo/repo', 'issues?state=open')
+                self.assertEqual(caught.exception.status, 401)
+                self.assertEqual(str(caught.exception), 'Não foi possível ler demo/repo/issues no GitHub (HTTP 401).')
 
 
 if __name__ == '__main__':

@@ -65,7 +65,9 @@ cycle() {
 # never told to stop, so it keeps starting new issues after SIGTERM; and a send
 # it is killed in stays `sending`, because the handler that records `unknown`
 # never runs. `exit 0` is deferred until the foreground child returns:
-# immediate while idle, after the pass while one is running.
+# immediate while idle, after the pass while one is running, and after root's
+# `prepare` while it runs -- a slow refresh, or a device flow asked for in the
+# instant before the tick, can hold shutdown past the grace period.
 #
 # Idle is a backgrounded $waiter, and the trap stops it as well: s6 signals only
 # this script, and a waiter left behind would go on answering the owner and
@@ -102,13 +104,12 @@ while :; do
 
   # As root: answer the owner's connect request, refresh a token near expiry --
   # here, between passes, because a refresh retires the token it replaces at
-  # once -- and print the access token for this pass, or nothing.
+  # once -- and print the access token for this pass, or nothing. With
+  # nothing, a configured install still runs the pass: gh refuses at once,
+  # with no network call (exit 4, read as a 401), and the pass tells the owner
+  # once, as for any 401. Standing down here instead left the owner unaware
+  # when root dropped a token GitHub had refused.
   GH_TOKEN=$($AUTH prepare) || GH_TOKEN=
-  if [ -z "$GH_TOKEN" ]; then
-    echo "watson-cycle: GitHub is not connected -- standing down; the owner connects it in chat" >&2
-    pause
-    continue
-  fi
 
   if [ ! -f "$WATSON_HOME/config.json" ]; then
     # Not an error: a fresh agent has not been through watson-setup yet, and

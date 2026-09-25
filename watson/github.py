@@ -34,7 +34,8 @@ class GitHub:
         if result.returncode:
             # Only the status is kept: gh's output quotes whatever GitHub sent.
             code = re.search(r'\(HTTP (\d{3})\)', result.stderr)
-            status = int(code[1]) if code else None
+            # gh exits 4 when it holds no credential at all; the owner hears it as a 401.
+            status = int(code[1]) if code else 401 if result.returncode == 4 else None
             raise GitHubError(f'Não foi possível ler {repo}/{resource.split("?")[0]} no GitHub'
                               + (f' (HTTP {status}).' if status else '.'), status)
         return json.loads(result.stdout)

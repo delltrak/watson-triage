@@ -33,6 +33,7 @@ class ImageTests(unittest.TestCase):
         start = run.index('cycle() {')
         block = run[start:run.index('\n}', start)]
         self.assertIn('env -i', block)
+        self.assertIn('GH_TOKEN="$GH_TOKEN"', block)  # the pass's only credential
         home = re.search(r'\bHOME=(\S+)', block).group(1)
         self.assertFalse(home.startswith('/var/lib/hermes'), home)
         self.assertNotRegex(block, r'\b(XDG_[A-Z_]+|GH_CONFIG_DIR)="?/var/lib/hermes')
@@ -65,7 +66,7 @@ class ImageTests(unittest.TestCase):
         # Between passes $AUTH answers the owner; while the agent can enter the store, nothing does.
         loop = code[code.index('while :; do'):]
         self.assertEqual([line for line in loop if line == 'pause' or 'sleep' in line],
-                         ['/bin/sleep 600 & waiter=$!; wait $waiter || true', 'pause', 'pause', 'pause'])
+                         ['/bin/sleep 600 & waiter=$!; wait $waiter || true', 'pause', 'pause'])
 
     def test_shutdown_stops_the_waiter_and_a_failing_auth_never_spins(self):
         run = (ROOT / 'image/s6-overlay/s6-rc.d/watson-cycle/run').read_text()

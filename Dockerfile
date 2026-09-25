@@ -68,8 +68,8 @@ RUN install -d -m 0555 -o root -g root /opt/watson/cycle-home
 
 # The GitHub App the owner authorizes by device code in chat. Both values are
 # public, and there is no client secret to ship; a fork that registers its own
-# app builds with its own. Built with either one empty, the cycle stands down
-# and its log says why.
+# app builds with its own. Built with either one empty, no pass gets a token
+# and the service log says why.
 ARG WATSON_GITHUB_CLIENT_ID=Iv23libOk1qkAwEBk90j
 ARG WATSON_GITHUB_APP_SLUG=watson-triage
 ENV WATSON_GITHUB_CLIENT_ID=$WATSON_GITHUB_CLIENT_ID WATSON_GITHUB_APP_SLUG=$WATSON_GITHUB_APP_SLUG
