@@ -12,6 +12,7 @@ from unittest import mock
 
 from watson import githubapp
 from watson.cli import main
+from watson.workflow import NOTICE
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -121,8 +122,20 @@ class ImageTests(unittest.TestCase):
         skill = (ROOT / 'image/skills/watson-setup/SKILL.md').read_text()
         head = re.search(r'^description: (.*)$', skill, re.M).group(1)[:57]
         self.assertIn('greeting', head)
-        # Plow runs a plain "1." list into one block; the templates keep the number in the bold.
-        self.assertFalse(re.search(r'^> \d+\. ', skill, re.M))
+
+    def test_nothing_the_owner_reads_is_a_markdown_list(self):
+        # Plow runs a "- " or "1. " list into one block and glues the next
+        # paragraph onto its last item: the number goes inside the bold.
+        persona = (ROOT / 'image/persona.md').read_text()
+        self.assertIn('Never start a line with - or 1. in chat', persona)
+        self.assertIn('**1. GitHub**', persona)
+        skill = (ROOT / 'image/skills/watson-setup/SKILL.md').read_text()
+        templates = [line[2:] for line in skill.splitlines() if line.startswith('> ')]
+        self.assertTrue(templates)
+        texts = [t for words in NOTICE.values() for t in words.values() if isinstance(t, str)]
+        texts += [t for words in NOTICE.values() for t in words['refused'].values()]
+        for text in templates + texts:
+            self.assertNotRegex(text, r'(?m)^\s*([-*+]|\d+\.) ', text)
 
 
 if __name__ == '__main__':

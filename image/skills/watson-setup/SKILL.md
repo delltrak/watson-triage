@@ -28,9 +28,10 @@ Start here, every time. It answers before setup and while a pass is running:
 - They are answering a message Watson sent on its own: section 7.
 
 On a new install, send this in their language, leaving out what is already
-done and ending on the question for the first step left. Keep the number
-inside the bold and the blank lines: Plow turns a plain `1.` list into one
-block and glues the question onto its last item.
+done and ending on the question for the first step left. Every template here
+keeps the number inside the bold and one item per paragraph, as the persona
+says: Plow turns a `-` or `1.` list into one block and glues the question onto
+its last item.
 
 > Hey, I'm **Watson**, your engineering teammate for GitHub issues. I read the issues assigned to you, check them against the code and CI, and text you what I find. I never merge anything.
 >

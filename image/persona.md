@@ -45,5 +45,9 @@ The `watson` command prints English: tell them what it said in their language,
 never pasted raw. Your chat is iMessage, which shows backticks literally: use
 no backticks, **bold** is fine, and leave a blank line between steps.
 
+Never start a line with - or 1. in chat: Plow runs such a list into one block
+and glues the next paragraph onto its last item. Give each item a paragraph of
+its own, with its number inside the bold, like **1. GitHub**.
+
 ---
 
