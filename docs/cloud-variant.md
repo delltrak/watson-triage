@@ -31,13 +31,22 @@ The mechanism is the Watson Triage GitHub App's device flow, split by uid:
   empty request file in the agent's home, which root `lstat`s and unlinks but
   never opens, and reads the answer from `/run/watson-github/status.json`,
   which root writes and the agent can only read: a state, the login, the
-  install URL, and the user code and verification URI while one is pending.
+  install URL, the user code and verification URI while one is pending, and
+  once connected the repositories the owner can pick from (name, whether
+  private, last push; ten at most, and how many there are).
 - Root's half, `python3 -I -m watson.githubapp`, runs inside the `watson-cycle`
   service, between passes. It asks GitHub for a device code, polls while the
   owner approves it, and keeps the access and refresh tokens in
   `/var/lib/watson-github/token.json`, `0600` in a root `0700` directory the
   agent cannot enter. The device code and the refresh token never leave it.
   The image builds in the app's public client id; there is no client secret.
+  Whenever something changed -- a connect, a refresh, a status lost to a
+  restart, the owner asking to connect again after installing the app -- it
+  reads the login and lists the repositories: `GET /user/installations`, then
+  one page of `/user/installations/{id}/repositories` for each of the first
+  ten, which with a user token covers only what the app is installed on and
+  the owner can read. A list GitHub will not give is left out; the connection
+  stands.
 - The access token lasts eight hours. Root refreshes it between passes once
   less than two hours are left -- never under a pass, since a refresh retires
   the old pair at once -- and hands each pass the access token alone, as

@@ -29,6 +29,8 @@ PENDING = ('POST', githubapp.TOKEN_URL, {'error': 'authorization_pending'})
 GRANTED = ('POST', githubapp.TOKEN_URL, {'access_token': 'ghu_A', 'refresh_token': 'ghr_A', 'expires_in': 28800,
                                          'refresh_token_expires_in': 15897600, 'token_type': 'bearer', 'scope': ''})
 USER = ('GET', USER_URL, {'login': 'octocat'})
+INSTALLATIONS_URL = 'https://api.github.com/user/installations?per_page=100'
+LISTED = ('GET', INSTALLATIONS_URL, {'total_count': 0, 'installations': []})  # installed nowhere yet
 # Everything that must stay in the root process: never in a log line, and the tokens never in the status.
 SECRETS = ('DEVICE-CODE', 'ghu_', 'ghr_')
 
@@ -108,7 +110,7 @@ class GitHubAppTest(unittest.TestCase):
     def test_connect_runs_the_device_flow_and_keeps_every_secret_root_only(self):
         self.ask()
         app = self.app(DEVICE, PENDING, ('POST', githubapp.TOKEN_URL, {'error': 'slow_down', 'interval': 10}),
-                       GRANTED, USER)
+                       GRANTED, USER, LISTED)
         seen, publish = [], app.publish
         app.publish = lambda state, **fields: (publish(state, **fields), seen.append(self.status.read_text()))
         self.assertEqual(app.prepare(), 'ghu_A')
@@ -121,6 +123,7 @@ class GitHubAppTest(unittest.TestCase):
             for secret in SECRETS:
                 self.assertNotIn(secret, text)
         self.assertEqual(self.published(), {'state': 'connected', 'login': 'octocat', 'updated_at': self.t,
+                                             'repositories': [], 'repository_count': 0,
                                              'install_url': 'https://github.com/apps/watson-triage/installations/new'})
         self.assertEqual(stat.S_IMODE(self.status.stat().st_mode), 0o644)
         self.assertEqual(stat.S_IMODE(self.status.parent.stat().st_mode), 0o755)
@@ -132,9 +135,10 @@ class GitHubAppTest(unittest.TestCase):
         self.assertEqual(poll, {'client_id': ['Iv23client'], 'device_code': ['DEVICE-CODE-40'],
                                 'grant_type': ['urn:ietf:params:oauth:grant-type:device_code']})
         self.assertEqual(self.github.form(0), {'client_id': ['Iv23client']})
-        for request in self.github.calls[:-1]:  # no bearer on the OAuth endpoints; only /user gets one
+        for request in self.github.calls[:-2]:  # no bearer on the OAuth endpoints; only the API gets one
             self.assertIsNone(request.get_header('Authorization'))
-        self.assertEqual(self.github.calls[-1].get_header('Authorization'), 'Bearer ghu_A')
+        for request in self.github.calls[-2:]:
+            self.assertEqual(request.get_header('Authorization'), 'Bearer ghu_A')
 
     def test_a_refused_or_lapsed_code_leaves_no_token_and_says_which(self):
         for error, state in (('access_denied', 'denied'), ('expired_token', 'expired'),
@@ -202,7 +206,7 @@ class GitHubAppTest(unittest.TestCase):
 
     def test_wait_answers_the_owner_without_starting_a_pass_early(self):
         self.ask()
-        self.app(DEVICE, GRANTED, USER).wait(30)
+        self.app(DEVICE, GRANTED, USER, LISTED).wait(30)
         self.assertEqual(self.published()['state'], 'connected')
         self.assertFalse((self.requests / githubapp.REQUEST).exists())
         self.assertTrue(1_000_000.0 + 30 <= self.t < 1_000_000.0 + 32)  # returned at the tick, not on the answer
@@ -210,7 +214,7 @@ class GitHubAppTest(unittest.TestCase):
     def test_refreshes_between_passes_without_a_client_secret(self):
         self.save(3600)  # under the two-hour margin
         new = {'access_token': 'ghu_NEW', 'refresh_token': 'ghr_NEW', 'expires_in': 28800}
-        self.assertEqual(self.app(('POST', githubapp.TOKEN_URL, new), USER).prepare(), 'ghu_NEW')
+        self.assertEqual(self.app(('POST', githubapp.TOKEN_URL, new), USER, LISTED).prepare(), 'ghu_NEW')
         self.assertEqual(self.github.form(0), {'client_id': ['Iv23client'], 'grant_type': ['refresh_token'],
                                                'refresh_token': ['ghr_OLD']})
         self.assertEqual(self.token(), {'access_token': 'ghu_NEW', 'refresh_token': 'ghr_NEW',
@@ -219,7 +223,7 @@ class GitHubAppTest(unittest.TestCase):
 
     def test_a_connected_pass_costs_no_github_call(self):
         self.save(5 * 3600)
-        self.assertEqual(self.app(USER).prepare(), 'ghu_OLD')  # no status yet, as after a restart: checked once
+        self.assertEqual(self.app(USER, LISTED).prepare(), 'ghu_OLD')  # no status yet, as after a restart: checked once
         self.assertEqual(self.published()['state'], 'connected')
         self.assertEqual(self.app().prepare(), 'ghu_OLD')      # then nothing, and no refresh
         self.assertEqual(self.github.calls, [])
@@ -243,17 +247,52 @@ class GitHubAppTest(unittest.TestCase):
     def test_a_token_that_never_expires_is_never_refreshed(self):
         self.app().save({'access_token': 'ghu_FOREVER'})
         self.t += 10 ** 8
-        self.assertEqual(self.app(USER).prepare(), 'ghu_FOREVER')
+        self.assertEqual(self.app(USER, LISTED).prepare(), 'ghu_FOREVER')
         self.assertEqual(self.token()['expires_at'], None)
 
     def test_a_connect_request_rechecks_and_a_revoked_token_asks_to_reconnect(self):
         self.save(5 * 3600)
-        self.app(USER).prepare()
+        self.app(USER, LISTED).prepare()
         self.assertEqual(self.published()['state'], 'connected')
         self.ask()  # connected, so only the owner's request makes this call
         self.assertIsNone(self.app(('GET', USER_URL, refused(401))).prepare())
         self.assertEqual((self.published()['state'], self.published()['detail']), ('reconnect', 'github_refused'))
         self.assertFalse((self.store / 'token.json').exists())
+
+    def test_the_owner_picks_from_the_repositories_the_app_can_read(self):
+        def repo(name, pushed):
+            return {'full_name': name, 'private': name == 'octo/secret', 'pushed_at': pushed,
+                    'owner': {'login': 'octo'}, 'permissions': {'admin': True}, 'clone_url': f'https://github.com/{name}.git'}
+
+        def page(installation, *repos, count=None):
+            return ('GET', f'https://api.github.com/user/installations/{installation}/repositories?per_page=100',
+                    {'total_count': count or len(repos), 'repository_selection': 'selected', 'repositories': list(repos)})
+        # Eleven installations: ten are read, a page each, and ten of their eleven repositories published.
+        installed = ('GET', INSTALLATIONS_URL, {'total_count': 11, 'installations': [{'id': n} for n in range(1, 12)]})
+        pages = [page(1, repo('octo/empty', None), repo('octo/secret', '2026-09-20T10:00:00Z'), count=150)]
+        pages += [page(n, repo(f'octo/r{n}', f'2026-09-{n:02d}T10:00:00Z')) for n in range(2, 11)]
+        self.save(5 * 3600)
+        self.assertEqual(self.app(USER, installed, *pages).prepare(), 'ghu_OLD')
+        self.assertEqual(self.github.script, [])
+        published = self.published()
+        self.assertEqual((published['state'], published['repository_count']), ('connected', 159))
+        self.assertEqual([r['full_name'] for r in published['repositories']],  # latest push first; never pushed, cut
+                         ['octo/secret'] + [f'octo/r{n}' for n in range(10, 1, -1)])
+        self.assertEqual(published['repositories'][0],  # names and dates, nothing else GitHub sent
+                         {'full_name': 'octo/secret', 'private': True, 'pushed_at': '2026-09-20T10:00:00Z'})
+        for request in self.github.calls:
+            self.assertEqual(request.get_header('Authorization'), 'Bearer ghu_OLD')
+        self.ask()  # "I installed it": asking again lists again
+        self.app(USER, ('GET', INSTALLATIONS_URL, {'total_count': 1, 'installations': [{'id': 12}]}),
+                 page(12, repo('octo/new', '2026-09-21T10:00:00Z'))).prepare()
+        self.assertEqual((self.published()['repositories'][0]['full_name'], self.published()['repository_count']),
+                         ('octo/new', 1))
+
+    def test_a_list_github_will_not_give_leaves_the_connection_standing(self):
+        self.save(5 * 3600)
+        self.assertEqual(self.app(USER, ('GET', INSTALLATIONS_URL, refused(502))).prepare(), 'ghu_OLD')
+        self.assertEqual(self.published()['state'], 'connected')
+        self.assertNotIn('repositories', self.published())
 
     def test_the_chat_asks_then_relays_roots_answer(self):
         def root_answers(_):

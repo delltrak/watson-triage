@@ -39,6 +39,8 @@ TOKEN_URL = 'https://github.com/login/oauth/access_token'
 REFRESH_BEFORE_S = 2 * 3600
 # Older than this, a request is a leftover from before a restart, not an owner waiting.
 REQUEST_TTL_S = 600
+# What GitHub or the network can do to one call.
+UNREACHABLE = (OSError, ValueError, KeyError, WatsonError, http.client.HTTPException)
 
 
 def _write(path, value, mode):
@@ -85,10 +87,27 @@ class App:
                          {'Accept': 'application/json', 'Content-Type': 'application/x-www-form-urlencoded'},
                          opener=self.opener)
 
-    def login(self, token):
-        return post_json('GET', 'https://api.github.com/user', None,
+    def get(self, path, token):
+        return post_json('GET', f'https://api.github.com{path}', None,
                          {'Authorization': f'Bearer {token}', 'Accept': 'application/vnd.github+json',
-                          'X-GitHub-Api-Version': '2022-11-28'}, opener=self.opener)['login']
+                          'X-GitHub-Api-Version': '2022-11-28'}, opener=self.opener)
+
+    def repositories(self, token):
+        """What the owner picks from: the repositories the app is installed on
+        and they can read, latest push first, by name. Ten installations and a
+        page each is more than one owner has. A list GitHub will not give is
+        left out, and the connection stands."""
+        try:
+            found, count = [], 0
+            for installation in self.get('/user/installations?per_page=100', token)['installations'][:10]:
+                page = self.get(f'/user/installations/{int(installation["id"])}/repositories?per_page=100', token)
+                found, count = found + page['repositories'], count + page['total_count']
+            found.sort(key=lambda repo: repo['pushed_at'] or '', reverse=True)
+            return {'repositories': [{k: repo[k] for k in ('full_name', 'private', 'pushed_at')} for repo in found[:10]],
+                    'repository_count': count}
+        except UNREACHABLE as exc:
+            self.log(f'could not list the repositories ({type(exc).__name__})')
+            return {}
 
     def publish(self, state, **fields):
         self.status.parent.mkdir(mode=0o755, exist_ok=True)
@@ -158,7 +177,7 @@ class App:
         if asked and not tokens:
             try:
                 tokens = self.device_flow()
-            except (OSError, ValueError, KeyError, WatsonError, http.client.HTTPException) as exc:
+            except UNREACHABLE as exc:
                 self.log(f'device flow failed ({type(exc).__name__})')
                 self.publish('failed', detail='github_unreachable')
         if not tokens:
@@ -177,15 +196,16 @@ class App:
                     self.forget(answer['error'])
                     return None
                 tokens, changed = self.save(answer), True
-            if changed:
-                self.publish('connected', login=self.login(tokens['access_token']))
+            if changed:  # the owner's list too, so "I installed it" is answered by connecting again
+                token = tokens['access_token']
+                self.publish('connected', login=self.get('/user', token)['login'], **self.repositories(token))
         except urllib.error.HTTPError as exc:
             if exc.code == 401:
                 self.log('GitHub answered 401 (revoked, or lapsed while down); the owner has to connect again')
                 self.forget('github_refused')
                 return None
             self.log(f'GitHub answered {exc.code}; keeping the token')
-        except (OSError, ValueError, KeyError, WatsonError, http.client.HTTPException) as exc:
+        except UNREACHABLE as exc:
             self.log(f'could not check the token ({type(exc).__name__}); keeping it')
         if tokens['expires_at'] and tokens['expires_at'] < self.clock() + 60:
             return None

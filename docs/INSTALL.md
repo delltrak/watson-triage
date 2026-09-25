@@ -31,7 +31,9 @@ for — is someone else's login waiting for you to finish it.
 asks for there: read access to actions, code, issues and metadata, nothing
 more. A private repository is readable only where Watson Triage is installed,
 and in an organization an admin may have to approve the install first. Until
-then GitHub answers "not found", and Watson tells you so.
+then GitHub answers "not found", and Watson tells you so. Once connected,
+Watson lists the repositories it can read, so you pick one by number; tell it
+when you have installed the app somewhere new and it lists them again.
 
 **Watson will not take a token you text it, and refuses if you offer one.** A
 token in the conversation is in the model's context and therefore at the
@@ -88,7 +90,8 @@ write in, English or Brazilian Portuguese, and sends its own updates in it. It
 asks for three things, one at a time:
 
 - **GitHub** — the code from section 1
-- **the repository** — `owner/repo`
+- **the repository** — a number from the list of those Watson Triage can
+  read, latest activity first, or `owner/repo` typed out
 - **the assignee** — the GitHub login whose assigned issues are yours; it
   proposes the one you connected with. This is the whole selection rule, so a
   wrong login means Watson sees nothing rather than too much.
