@@ -46,8 +46,9 @@ The mechanism is the Watson Triage GitHub App's device flow, split by uid:
   reads the login and lists the repositories: `GET /user/installations`, then
   one page of `/user/installations/{id}/repositories` for each of the first
   ten, which with a user token covers only what the app is installed on and
-  the owner can read. A list GitHub will not give is left out; the connection
-  stands. On the owner's disconnect it deletes `token.json` and sends both
+  the owner can read. A list GitHub will not give is left out, which is not an
+  empty one: the connection stands, root asks again on the next tick, and
+  before `init` the owner is told nothing about repositories until it has one. On the owner's disconnect it deletes `token.json` and sends both
   tokens to GitHub's credential revocation endpoint (`POST /credentials/revoke`,
   unauthenticated by design, for `ghu_` and `ghr_` tokens alike), which GitHub
   may refuse or rate-limit without changing the outcome here: the tokens are

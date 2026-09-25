@@ -224,8 +224,10 @@ class App:
             return None
         try:
             # Checked only when something moved -- a connect, a refresh, a status
-            # lost to a restart -- so a connected pass costs no extra call.
-            changed = asked or read_status(self.status).get('state') != 'connected'
+            # lost to a restart, a list GitHub would not give -- so a connected
+            # pass costs no extra call. No list is not an empty one: it is asked for again.
+            known = read_status(self.status)
+            changed = asked or known.get('state') != 'connected' or 'repositories' not in known
             if tokens['expires_at'] and tokens['expires_at'] - self.clock() < REFRESH_BEFORE_S:
                 answer = self.form(TOKEN_URL, client_id=self.client_id, grant_type='refresh_token',
                                    refresh_token=tokens['refresh_token'])

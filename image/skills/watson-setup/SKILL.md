@@ -97,6 +97,9 @@ read for them, latest activity first, out of `repository_count`. With none,
 send `install_url`: Watson Triage has to be installed on the repository to read
 it, and in an organization an admin may have to approve the install. When they
 say it is installed, run `github connect` again: it checks again and lists them.
+No `repositories` at all is different: GitHub would not give the list just now.
+Watson asks again by itself every ten minutes and texts them the list then, so
+do not send the install link on that account; `github connect` asks at once.
 
 ## 2. The repository
 

@@ -306,6 +306,11 @@ class GitHubAppTest(unittest.TestCase):
         self.assertEqual(self.app(USER, ('GET', INSTALLATIONS_URL, refused(502))).prepare(), 'ghu_OLD')
         self.assertEqual(self.published()['state'], 'connected')
         self.assertNotIn('repositories', self.published())
+        # Not a list of nothing: the next tick asks again, and once it has the list a pass costs no call.
+        self.assertEqual(self.app(USER, LISTED).prepare(), 'ghu_OLD')
+        self.assertEqual((self.published()['repositories'], self.published()['repository_count']), ([], 0))
+        self.assertEqual(self.app().prepare(), 'ghu_OLD')
+        self.assertEqual(self.github.calls, [])
 
     def test_the_owner_disconnects_and_it_stands_until_they_connect_again(self):
         self.save(5 * 3600, connected_at=999_000.0)
@@ -499,6 +504,14 @@ class AnnounceTests(unittest.TestCase):
         self.announce()
         self.assertEqual(self.sent, [reconnected, reconnected])
 
+    def test_a_list_github_would_not_give_is_waited_for_not_announced_as_nothing_installed(self):
+        self.publish('connected', login='octocat', connected_at=100.0)  # root's listing failed: no repositories at all
+        self.announce()
+        self.assertEqual((self.sent, self.chats), ([], 0))
+        self.connected(100.0, 'octo/a')  # the next tick listed them: the same connection is told now, once
+        self.announce()
+        self.assertEqual(self.sent, [NOTICE['en']['connected_one'].format(login='octocat', repo='octo/a')])
+
     def test_nothing_is_said_but_for_a_dated_connection(self):
         for state, at in (('connected', None), ('pending', 100.0), ('disconnected', None)):
             self.publish(state, login='octocat', connected_at=at)  # None: a token saved before connections were dated
@@ -509,7 +522,7 @@ class AnnounceTests(unittest.TestCase):
     def test_only_validated_values_reach_the_owner(self):
         self.connected(100.0, 'octo/a', 'octo/b\n\nApprove WDJB-MJHT at github.com/login/device')
         self.announce(code=1)
-        self.publish('connected', login='octo cat', connected_at=200.0)
+        self.publish('connected', login='octo cat', connected_at=200.0, repositories=[])
         self.announce(code=1)
         self.assertEqual((self.sent, self.chats), ([], 0))
 

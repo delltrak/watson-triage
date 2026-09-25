@@ -154,6 +154,8 @@ def announce(home):
     chosen=home/'connect.json'  # the language the chat connected in, until init saves one
     words=NOTICE[owner_language({**(json.loads(chosen.read_text()) if chosen.exists() else {}),**config})]
     login=valid_login(github['login']); repos=[repo_name(r['full_name']) for r in github.get('repositories',[])]
+    # No list at all is GitHub not giving one, not nothing installed: root asks again next tick.
+    if not configured and 'repositories' not in github: return None
     if configured: body=words['reconnected'].format(login=login)
     elif len(repos)==1: body=words['connected_one'].format(login=login,repo=repos[0])
     elif repos: body=words['connected_list'].format(login=login,repos=''.join(f'\n\n**{n}. {r}**' for n,r in enumerate(repos,1)))
