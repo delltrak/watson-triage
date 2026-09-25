@@ -65,7 +65,9 @@ When the owner asks to connect, or says yes to the code:
 
 `LANG` is `en` or `pt`, the language they write in. Once they approve, Watson
 texts them on its own, within seconds and in that language, that GitHub is
-connected; they do not have to tell you it worked.
+connected; they do not have to tell you it worked. The one exception is a
+configured install with `config.notify_owner` false, a quiet agent, which
+sends nothing: when they say they approved, run `status`.
 
 The command prints the `github` object of `status`. By `state`:
 
@@ -105,10 +107,14 @@ do not send the install link on that account; `github connect` asks at once.
 
 Ask which repository to watch from `github.repositories`, numbered in that
 order, and take a number back; Watson's own message on connecting may already
-have asked, in the same order. With exactly one, propose it by name. With none,
-the install step in section 1 comes first. owner/repo typed out always works
-too, for one the list does not show. Take one. Related repositories can be added
-later; do not ask about them now.
+have asked. A bare number answers the list in the message they are answering,
+which is in the conversation: read it there. Use `github.repositories` only when
+that message is not visible to you, since root sorts it again by push each time
+it lists, so its order may have moved since. Say the repository's name back to
+them before `init`. With exactly one, propose it by name. With none, the install
+step in section 1 comes first. owner/repo typed out always works too, for one
+the list does not show. Take one. Related repositories can be added later; do
+not ask about them now.
 
 > Which repository should I watch? Reply with its number:
 >
@@ -201,7 +207,7 @@ are raw text, often in Portuguese: explain them, never paste them.
   a configured install it said only that GitHub is reconnected: whether Watson
   Triage can still read the repository is for the next pass to find. Before setup
   `status` has no `actions`: a bare number from the owner answers this
-  message, and it is that position in `github.repositories` (section 2).
+  message, and it is that position in the list the message sent (section 2).
 - `owner_setup_notice`: the setup works — the repository, the login and how
   many issues are open. With none open it asks them to confirm the login; a
   corrected one goes through `config --assignee`.
@@ -269,9 +275,13 @@ them. Say instead that you deleted your access but could not reach GitHub, so
 it stays valid there until they revoke Watson Triage themselves, now, at
 https://github.com/settings/apps/authorizations.
 
-`queued: true`: a pass is running, and the disconnect happens when it ends,
-within minutes; say so. The repository, login and tracked numbers stay as they
-are, and Watson does not report GitHub's refusal while it is disconnected. When
-they connect again it picks up where it was, and texts them that GitHub is
-reconnected; if the app is no longer installed on the repository, the next pass
-says so.
+`queued: true`: root is busy, and the disconnect happens when that ends; say so.
+It is either a pass (within minutes) or a code they have not approved yet, which
+stays good for up to 15 minutes, so `state` `pending` with a `user_code` in the
+output is that code, and the disconnect follows when it expires or is approved.
+Never send that code again: they asked to disconnect, not to connect.
+
+The repository, login and tracked numbers stay as they are, and Watson does not
+report GitHub's refusal while it is disconnected. When they connect again it
+picks up where it was, and texts them that GitHub is reconnected; if the app is
+no longer installed on the repository, the next pass says so.

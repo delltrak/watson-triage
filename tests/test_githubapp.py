@@ -364,9 +364,14 @@ class GitHubAppTest(unittest.TestCase):
         self.assertIsNone(self.app(('POST', REVOKE_URL, {})).prepare())
         self.assertEqual(json.loads(self.github.calls[0].data), {'credentials': ['ghu_FOREVER']})
 
-    def test_the_chat_asks_to_disconnect_even_with_a_code_pending(self):
+    def test_the_chat_files_a_disconnect_even_with_a_code_pending_and_root_answers_when_it_is_free(self):
+        # The chat's half only. Root reads requests between flows, so a code not yet
+        # approved keeps it from this one: queued, with the code still in the output,
+        # which the skill tells the model never to send again.
         self.app().publish('pending', user_code='ABCD-1234', verification_uri='https://github.com/login/device',
                            expires_at=self.t + 900)
+        busy = request('disconnect', status=self.status, requests=self.requests, wait_s=0, clock=self.clock)
+        self.assertEqual((busy['state'], busy['user_code'], busy['queued']), ('pending', 'ABCD-1234', True))
 
         def root_answers(_):
             self.t += 1
