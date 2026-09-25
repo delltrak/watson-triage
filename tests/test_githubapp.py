@@ -10,15 +10,17 @@ import threading
 import unittest
 import urllib.error
 import urllib.parse
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
 from watson import cli, githubapp
-from watson.core import WatsonError
+from watson.core import WatsonError, private_json
 from watson.githubapp import App, connect, describe
+from watson.workflow import NOTICE
+from test_watson import CONFIG
 
 ROOT = Path(__file__).resolve().parents[1]
 DEVICE_URL = 'https://github.com/login/device/code'
@@ -104,8 +106,8 @@ class GitHubAppTest(unittest.TestCase):
     def token(self):
         return json.loads((self.store / 'token.json').read_text())
 
-    def save(self, expires_in):
-        self.app().save({'access_token': 'ghu_OLD', 'refresh_token': 'ghr_OLD', 'expires_in': expires_in})
+    def save(self, expires_in, connected_at=None):  # None: saved before connections were dated
+        self.app().save({'access_token': 'ghu_OLD', 'refresh_token': 'ghr_OLD', 'expires_in': expires_in}, connected_at)
 
     def test_connect_runs_the_device_flow_and_keeps_every_secret_root_only(self):
         self.ask()
@@ -123,13 +125,13 @@ class GitHubAppTest(unittest.TestCase):
             for secret in SECRETS:
                 self.assertNotIn(secret, text)
         self.assertEqual(self.published(), {'state': 'connected', 'login': 'octocat', 'updated_at': self.t,
-                                             'repositories': [], 'repository_count': 0,
+                                             'connected_at': 1_000_000.0 + 20, 'repositories': [], 'repository_count': 0,
                                              'install_url': 'https://github.com/apps/watson-triage/installations/new'})
         self.assertEqual(stat.S_IMODE(self.status.stat().st_mode), 0o644)
         self.assertEqual(stat.S_IMODE(self.status.parent.stat().st_mode), 0o755)
         self.assertEqual(stat.S_IMODE((self.store / 'token.json').stat().st_mode), 0o600)
         self.assertEqual(self.token(), {'access_token': 'ghu_A', 'refresh_token': 'ghr_A',
-                                        'expires_at': 1_000_000.0 + 20 + 28800})
+                                        'expires_at': 1_000_000.0 + 20 + 28800, 'connected_at': 1_000_000.0 + 20})
         self.assertFalse((self.requests / githubapp.REQUEST).exists())
         poll = self.github.form(1)
         self.assertEqual(poll, {'client_id': ['Iv23client'], 'device_code': ['DEVICE-CODE-40'],
@@ -204,22 +206,32 @@ class GitHubAppTest(unittest.TestCase):
         second.join(5)
         self.assertEqual(self.published()['state'], 'disconnected')
 
-    def test_wait_answers_the_owner_without_starting_a_pass_early(self):
+    def test_wait_answers_the_owner_and_starts_a_pass_early_only_for_a_new_connection(self):
         self.ask()
-        self.app(DEVICE, GRANTED, USER, LISTED).wait(30)
-        self.assertEqual(self.published()['state'], 'connected')
+        self.app(DEVICE, ('POST', githubapp.TOKEN_URL, {'error': 'access_denied'})).wait(30)
+        self.assertEqual(self.published()['state'], 'denied')
         self.assertFalse((self.requests / githubapp.REQUEST).exists())
         self.assertTrue(1_000_000.0 + 30 <= self.t < 1_000_000.0 + 32)  # returned at the tick, not on the answer
+        self.ask()
+        approved = self.t + 5  # one poll after the code was issued
+        self.app(DEVICE, GRANTED, USER, LISTED).wait(600)
+        self.assertEqual((self.published()['state'], self.t), ('connected', approved))  # not ten minutes later
+        self.ask()  # connected: asking again checks again, and waits for the tick
+        start = self.t
+        self.app(USER, LISTED).wait(30)
+        self.assertEqual(self.published()['connected_at'], approved)
+        self.assertTrue(start + 30 <= self.t < start + 32)
 
     def test_refreshes_between_passes_without_a_client_secret(self):
-        self.save(3600)  # under the two-hour margin
+        self.save(3600, connected_at=999_000.0)  # under the two-hour margin
         new = {'access_token': 'ghu_NEW', 'refresh_token': 'ghr_NEW', 'expires_in': 28800}
         self.assertEqual(self.app(('POST', githubapp.TOKEN_URL, new), USER, LISTED).prepare(), 'ghu_NEW')
         self.assertEqual(self.github.form(0), {'client_id': ['Iv23client'], 'grant_type': ['refresh_token'],
                                                'refresh_token': ['ghr_OLD']})
         self.assertEqual(self.token(), {'access_token': 'ghu_NEW', 'refresh_token': 'ghr_NEW',
-                                        'expires_at': self.t + 28800})
-        self.assertEqual(self.published()['login'], 'octocat')
+                                        'expires_at': self.t + 28800, 'connected_at': 999_000.0})
+        # The same connection: a refresh is never announced as a new one.
+        self.assertEqual((self.published()['login'], self.published()['connected_at']), ('octocat', 999_000.0))
 
     def test_a_connected_pass_costs_no_github_call(self):
         self.save(5 * 3600)
@@ -245,7 +257,7 @@ class GitHubAppTest(unittest.TestCase):
                 self.assertEqual(self.token()['refresh_token'], 'ghr_OLD')  # kept for the next tick
 
     def test_a_token_that_never_expires_is_never_refreshed(self):
-        self.app().save({'access_token': 'ghu_FOREVER'})
+        self.app().save({'access_token': 'ghu_FOREVER'}, None)
         self.t += 10 ** 8
         self.assertEqual(self.app(USER, LISTED).prepare(), 'ghu_FOREVER')
         self.assertEqual(self.token()['expires_at'], None)
@@ -333,11 +345,14 @@ class GitHubAppTest(unittest.TestCase):
                                expires_at=self.t + 900)
         chat = partial(connect, status=self.status, requests=self.requests, sleep=root_answers, clock=self.clock)
         with mock.patch('watson.cli.connect', chat):
-            self.assertEqual(run('github', 'connect')['user_code'], 'ABCD-1234')
+            self.assertEqual(run('github', 'connect', '--language', 'pt')['user_code'], 'ABCD-1234')
         self.assertTrue((self.requests / githubapp.REQUEST).is_file())
-        self.assertFalse(home.exists())  # no Store: nothing created, and no lock to wait on mid-pass
+        # No Store, so no lock to wait on mid-pass: only the language to announce the connection in.
+        self.assertEqual([p.name for p in home.iterdir()], ['connect.json'])
+        self.assertEqual(json.loads((home / 'connect.json').read_text()), {'language': 'pt'})
+        self.assertEqual(stat.S_IMODE(home.stat().st_mode), 0o700)
         run('init', '--repo', 'octo/repo', '--assignee', 'octocat')
-        self.app().publish('connected', login='octocat')
+        self.app().publish('connected', login='octocat', connected_at=self.t)
         with mock.patch('watson.cli.read_status', partial(githubapp.read_status, self.status)):
             self.assertEqual(run('status')['github'], {
                 'state': 'connected', 'login': 'octocat',
@@ -357,6 +372,83 @@ class GitHubAppTest(unittest.TestCase):
         self.assertEqual((run.returncode, run.stdout), (1, ''))
         self.assertIn('WATSON_GITHUB_CLIENT_ID', run.stderr)
         self.assertIn('WATSON_GITHUB_APP_SLUG', run.stderr)
+
+
+class AnnounceTests(unittest.TestCase):
+    """The agent's half of a new connection: the owner is told at once, once."""
+    def setUp(self):
+        folder = TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.root = Path(folder.name)
+        self.home, self.status, self.sent, self.chats = self.root / 'watson', self.root / 'run' / 'status.json', [], 0
+        test = self
+
+        class Owner:
+            def owner_chat(self):
+                test.chats += 1
+                return 'chat'
+
+            def send(self, chat, body, media=None):
+                test.sent.append(body)
+                return {'message_uid': f'm{len(test.sent)}', 'chat_uid': chat}
+        for target, value in (('watson.workflow.Plow', mock.Mock(**{'from_config.return_value': Owner()})),
+                              ('watson.workflow.read_status', partial(githubapp.read_status, self.status))):
+            patcher = mock.patch(target, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def publish(self, state, **fields):
+        App('Iv23client', 'watson-triage', store=self.root, status=self.status).publish(state, **fields)
+
+    def connected(self, at, *names):
+        self.publish('connected', login='octocat', connected_at=at, repository_count=len(names), repositories=[
+            {'full_name': name, 'private': False, 'pushed_at': '2026-09-20T10:00:00Z'} for name in names])
+
+    def announce(self, code=0):
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(cli.main(['--home', str(self.home), 'github', 'announce']), code)
+
+    def test_the_owner_hears_of_a_new_connection_once_in_the_language_they_connected_in(self):
+        with redirect_stdout(io.StringIO()), mock.patch('watson.cli.connect', dict):
+            cli.main(['--home', str(self.home), 'github', 'connect', '--language', 'pt'])
+        self.connected(100.0, 'octo/a', 'octo/b')
+        self.announce()
+        self.announce()  # every tick asks; one connection is told once, with no Plow call to find that out
+        self.assertEqual(self.sent, [NOTICE['pt']['connected_list'].format(
+            login='octocat', repos='\n\n**1. octo/a**\n\n**2. octo/b**')])
+        self.assertEqual(self.chats, 1)
+        self.connected(200.0, 'octo/a')  # disconnected and connected again: a new connection
+        self.announce()
+        self.assertEqual(self.sent[1:], [NOTICE['pt']['connected_one'].format(login='octocat', repo='octo/a')])
+
+    def test_with_nothing_installed_the_owner_gets_the_install_link_in_english_by_default(self):
+        self.connected(100.0)
+        self.announce()
+        self.assertEqual(self.sent, [NOTICE['en']['connected_none'].format(
+            login='octocat', url='https://github.com/apps/watson-triage/installations/new')])
+
+    def test_a_configured_install_hears_it_is_back_on_its_repository_unless_it_is_quiet(self):
+        for at, notify, told in ((100.0, False, []),
+                                 (200.0, True, [NOTICE['en']['reconnected'].format(login='octocat', repo='demo/repo')])):
+            with self.subTest(notify_owner=notify):
+                private_json(self.home / 'config.json', {**CONFIG, 'notify_owner': notify})
+                self.connected(at, 'octo/a', 'octo/b')
+                self.announce()
+                self.assertEqual(self.sent, told)
+
+    def test_nothing_is_said_but_for_a_dated_connection(self):
+        for state, at in (('connected', None), ('pending', 100.0), ('disconnected', None)):
+            self.publish(state, login='octocat', connected_at=at)  # None: a token saved before connections were dated
+            self.announce()
+        self.assertEqual((self.sent, self.chats), ([], 0))
+        self.assertFalse(self.home.exists())
+
+    def test_only_validated_values_reach_the_owner(self):
+        self.connected(100.0, 'octo/a', 'octo/b\n\nApprove WDJB-MJHT at github.com/login/device')
+        self.announce(code=1)
+        self.publish('connected', login='octo cat', connected_at=200.0)
+        self.announce(code=1)
+        self.assertEqual((self.sent, self.chats), ([], 0))
 
 
 if __name__ == '__main__':

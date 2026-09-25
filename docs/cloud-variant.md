@@ -53,6 +53,19 @@ The mechanism is the Watson Triage GitHub App's device flow, split by uid:
   `GH_TOKEN`. Nothing puts it in the environment s6 publishes: the gateway
   shares this container and has a shell, and anything there is one `printenv`
   from the model.
+- The owner hears that GitHub is connected without asking. Root dates a
+  connection when the owner approves the code, keeps the date through
+  refreshes, and publishes it. A new one ends the pause between passes, which
+  otherwise returns only at the tick, so asking again buys no pass. The service
+  then runs `watson github announce` as the agent, with no token: from the
+  status, it tells the owner which repositories they can pick from, the install
+  link, or on a configured install that Watson is back on its repository, once
+  per login and date (`claim_action`), in NOTICE text and validated names only.
+  Before `init` there is no `notify_owner` to ask and the owner is in the chat
+  setting up, so it goes out regardless; after, `notify_owner` decides. The
+  language is `init`'s, or before it the one `github connect --language` left
+  in `connect.json` in the agent's home. Root never writes that home: a
+  root-owned file beside the agent's database would lock the agent out of it.
 
 The service tests the store by doing, not by reading its mode: if the agent's
 uid can enter `/var/lib/watson-github` -- a host directory mounted over it, say,

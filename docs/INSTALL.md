@@ -16,7 +16,8 @@ agent thinks through Plow's own inference, and you connect GitHub in chat.
 There is no token to create and nothing to mount. Once the agent is up
 (section 2), Watson connects GitHub in the chat: it sends you
 <https://github.com/login/device> and a short code. Open the link, type the
-code, and approve.
+code, and approve. Watson texts you within seconds that it worked; there is no
+need to tell it.
 
 **Approve only if the page names Watson Triage.** GitHub's page says "Act on
 your behalf" for every app; what this one may do, read-only, is listed when you

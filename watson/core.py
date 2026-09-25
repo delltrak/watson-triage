@@ -198,6 +198,10 @@ class Store:
             raise WatsonError('Investigação não encontrada.')
         return dict(row)
 
+    def claimed(self, run_id, kind, payload):
+        return self.db.execute('SELECT 1 FROM actions WHERE key=?',
+                               (digest({'run': run_id, 'kind': kind, 'payload': payload}),)).fetchone() is not None
+
     def claim_action(self, run_id, kind, payload):
         key = digest({'run': run_id, 'kind': kind, 'payload': payload})
         try:

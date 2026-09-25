@@ -38,8 +38,9 @@ Browser validation is configured per issue. A human supplies the trusted test en
 plow-agents deploy --local --line ln_xxx   # docs/INSTALL.md has the whole path
 ```
 
-Then text the line. Watson sends you a code to connect GitHub, asks for the
-repository and the assignee, and runs a cycle every ten minutes.
+Then text the line. Watson sends you a code to connect GitHub, texts you as
+soon as you approve it with the repositories it can read, asks which one and
+the assignee, and runs a cycle every ten minutes.
 
 **It never takes a GitHub token, and refuses if you offer one.** You approve
 the Watson Triage GitHub App, read-only, by typing that code at github.com.

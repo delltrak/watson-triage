@@ -36,19 +36,22 @@ AUTH='/opt/hermes/.venv/bin/python3 -I -m watson.githubapp'
 # agent owns. `env -i` is what keeps it that way: it clears GH_CONFIG_DIR and
 # the XDG_* variables, which would otherwise override it.
 #
-# Residual, named here and in issue #2: the child below runs as `hermes`, the
+# Residual, named here and in issue #2: the pass runs as `hermes`, the
 # gateway's own uid, so its /proc entry -- the token with it -- is readable for
 # as long as a pass runs: minutes when an issue changed. That is the access
 # token alone; the refresh token never leaves $AUTH.
-cycle() {
+as_agent() {
   /command/s6-setuidgid hermes env -i \
     PATH="$PATH" HOME=/opt/watson/cycle-home \
     PLOW_API_BASE="$PLOW_API_BASE" \
     PLOW_AGENT_TOKEN="$PLOW_AGENT_TOKEN" \
     HERMES_CUSTOM_PLOW_API_KEY="$HERMES_CUSTOM_PLOW_API_KEY" \
-    GH_TOKEN="$GH_TOKEN" \
     ${TZ:+TZ="$TZ"} \
-    /opt/hermes/.venv/bin/watson --home "$WATSON_HOME" cycle
+    "$@"
+}
+
+cycle() {
+  as_agent GH_TOKEN="$GH_TOKEN" /opt/hermes/.venv/bin/watson --home "$WATSON_HOME" cycle
 }
 
 # On shutdown, stop starting NEW passes -- do NOT kill a running one.
@@ -77,8 +80,10 @@ trap 'kill $waiter 2>/dev/null; exit 0' TERM INT
 # Ten minutes, backgrounded and waited rather than in the foreground: a trap
 # does not interrupt a foreground child, so shutdown would stall until the
 # grace period SIGKILLed us. `wait` returns as soon as the handler runs.
-# Meanwhile $AUTH answers a connect request within seconds, and still returns
-# only at the tick, so asking again buys no pass. If it fails instead -- an
+# Meanwhile $AUTH answers a connect request within seconds, and returns at the
+# tick, so asking again buys no pass -- or right after a new connection, which
+# only approving a code on github.com makes, so the owner hears of it at once
+# instead of up to ten minutes later. If it fails instead -- an
 # image built without the app, say, which it reports -- the rest is a plain
 # sleep, so the loop never spins.
 pause() {
@@ -110,6 +115,13 @@ while :; do
   # once, as for any 401. Standing down here instead left the owner unaware
   # when root dropped a token GitHub had refused.
   GH_TOKEN=$($AUTH prepare) || GH_TOKEN=
+
+  # The owner hears that GitHub is connected as soon as root says so, once per
+  # connection, before setup too. The agent sends it, with no token, never
+  # root: it writes the agent's own database, where a file root created would
+  # lock the agent out. What went out is in `watson status`, so stdout is
+  # dropped.
+  as_agent /opt/hermes/.venv/bin/watson --home "$WATSON_HOME" github announce >/dev/null
 
   if [ ! -f "$WATSON_HOME/config.json" ]; then
     # Not an error: a fresh agent has not been through watson-setup yet, and

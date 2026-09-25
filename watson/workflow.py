@@ -5,9 +5,11 @@ from pathlib import Path
 from .analysis import PlowInference, object_schema, STRING, triage
 from .browser import run_browser, credentials_path
 from .cases import Cases
-from .core import LANGUAGE_NAMES, WatsonError, Store, digest, load_config, now, owner_language, private_json
+from .core import LANGUAGE_NAMES, WatsonError, Store, digest, load_config, now, owner_language, private_json, repo_name
+from .core import login as valid_login
 from .delivery import Plow
 from .github import GitHub
+from .githubapp import read_status
 from .writes import GitHubWriter, MARKER
 from .captions import narrate
 
@@ -59,8 +61,8 @@ def compose(model, issue, result, state, validation, private_channel, previous, 
 
 # What the cycle tells the owner on its own, in their language. Beyond an issue
 # update's summary, only this text and validated values (repository, login,
-# numbers) go out this way, never exception text: the chat explains details
-# from `watson status`.
+# numbers, the app's install link) go out this way, never exception text: the
+# chat explains details from `watson status`.
 NOTICE={
     'en':{'waiting_access':'Waiting for test access','waiting_info':'Waiting for the author to reply',
           'reproduced':'Problem reproduced in the test','validated':'Test scenario passed',
@@ -71,6 +73,12 @@ NOTICE={
           'set_up':'Watson is set up: watching {repo} for issues assigned to {assignee}. Open now: {count}. '
                    'An issue already open I look at when you send its number; issues assigned from now on I pick up on my own.',
           'no_issues':'\n\nIf {assignee} is not the right GitHub login, tell me the right one.',
+          'connected_list':'Watson: GitHub is connected as {login}. Which repository should I watch? Reply with its number:'
+                           '{repos}\n\nOr send me owner/repo if it is not here.',
+          'connected_one':'Watson: GitHub is connected as {login}, and Watson Triage can read {repo}. Shall I watch it?',
+          'connected_none':'Watson: GitHub is connected as {login}. Now install Watson Triage on the repository I should '
+                           'watch:\n\n{url}\n\nTell me when you have installed it.',
+          'reconnected':'Watson: GitHub is reconnected as {login}, and I am back on {repo}.',
           'refused':{401:"GitHub refused Watson's access to {repo}; it expired or was revoked. Reply and I will reconnect it. "
                          'Until then I am not checking issues.',
                      403:'GitHub denied access to {repo} (permission or rate limit). Until then I am not checking issues.',
@@ -86,6 +94,12 @@ NOTICE={
           'set_up':'Watson configurado: acompanho {repo}, issues atribuídas a {assignee}. Abertas agora: {count}. '
                    'Uma issue já aberta eu vejo quando você me mandar o número; as atribuídas daqui em diante eu pego sozinho.',
           'no_issues':'\n\nSe {assignee} não for o login certo no GitHub, me diga o certo.',
+          'connected_list':'Watson: GitHub conectado como {login}. Qual repositório devo acompanhar? Responda com o número:'
+                           '{repos}\n\nOu me mande dono/repo se não estiver aqui.',
+          'connected_one':'Watson: GitHub conectado como {login}, e o Watson Triage consegue ler {repo}. Acompanho esse?',
+          'connected_none':'Watson: GitHub conectado como {login}. Agora instale o Watson Triage no repositório que devo '
+                           'acompanhar:\n\n{url}\n\nMe avise quando tiver instalado.',
+          'reconnected':'Watson: GitHub reconectado como {login}, e voltei a acompanhar {repo}.',
           'refused':{401:'O GitHub recusou o acesso do Watson a {repo}; ele expirou ou foi revogado. Responda e eu reconecto. '
                          'Até lá não verifico issues.',
                      403:'O GitHub negou acesso a {repo} (permissão ou limite de uso). Até lá não verifico issues.',
@@ -120,12 +134,33 @@ def send_owner(store, channel, run_id, kind, payload, body, media=None):
 
 def tell_owner(store, config, kind, payload, body):
     # Never fatal to the pass. The claim sends a payload once; a Plow that
-    # cannot be reached claims nothing.
-    if not config.get('notify_owner'): return None
+    # cannot be reached claims nothing. One already claimed costs no Plow
+    # call, which a notice checked every pass would otherwise pay each time.
+    if not config.get('notify_owner') or store.claimed(None,kind,payload): return None
     try:
         plow=Plow.from_config(config)
         return send_owner(store,(plow,plow.owner_chat()),None,kind,payload,body)
     except Exception: return None
+
+
+def announce(home):
+    """Tell the owner GitHub is connected as soon as root says so, once per
+    connection. Before setup too, with no notify_owner to ask yet: the owner is
+    in the chat setting it up. The agent sends it; root never writes here."""
+    github=read_status()
+    if github.get('state')!='connected' or not github.get('connected_at'): return None
+    home=Path(home).resolve(); configured=(home/'config.json').exists()
+    config=load_config(home) if configured else {'notify_owner':True}
+    chosen=home/'connect.json'  # the language the chat connected in, until init saves one
+    words=NOTICE[owner_language({**(json.loads(chosen.read_text()) if chosen.exists() else {}),**config})]
+    login=valid_login(github['login']); repos=[repo_name(r['full_name']) for r in github.get('repositories',[])]
+    if configured: body=words['reconnected'].format(login=login,repo=config['repository'])
+    elif len(repos)==1: body=words['connected_one'].format(login=login,repo=repos[0])
+    elif repos: body=words['connected_list'].format(login=login,repos=''.join(f'\n\n**{n}. {r}**' for n,r in enumerate(repos,1)))
+    else: body=words['connected_none'].format(login=login,url=github['install_url'])
+    store=Store(home)
+    try: return tell_owner(store,config,'owner_github_notice',{'login':login,'connected_at':github['connected_at']},body)
+    finally: store.db.close()
 
 
 def cycle(home, *, model=None, github=None, writer=None):

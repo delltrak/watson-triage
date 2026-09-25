@@ -31,10 +31,11 @@ class ImageTests(unittest.TestCase):
         # The agent writes /var/lib/hermes, and `gh` reads $HOME/.config/gh: an
         # http_unix_socket planted there is handed GH_TOKEN on every pass.
         run = (ROOT / 'image/s6-overlay/s6-rc.d/watson-cycle/run').read_text()
-        start = run.index('cycle() {')
+        start = run.index('as_agent() {')
         block = run[start:run.index('\n}', start)]
         self.assertIn('env -i', block)
-        self.assertIn('GH_TOKEN="$GH_TOKEN"', block)  # the pass's only credential
+        self.assertNotIn('GH_TOKEN', block)
+        self.assertIn('as_agent GH_TOKEN="$GH_TOKEN" ', run)  # the pass's only credential
         home = re.search(r'\bHOME=(\S+)', block).group(1)
         self.assertFalse(home.startswith('/var/lib/hermes'), home)
         self.assertNotRegex(block, r'\b(XDG_[A-Z_]+|GH_CONFIG_DIR)="?/var/lib/hermes')
@@ -68,6 +69,32 @@ class ImageTests(unittest.TestCase):
         loop = code[code.index('while :; do'):]
         self.assertEqual([line for line in loop if line == 'pause' or 'sleep' in line],
                          ['/bin/sleep 600 & waiter=$!; wait $waiter || true', 'pause', 'pause'])
+
+    def test_the_agent_tells_the_owner_of_a_connection_without_the_token(self):
+        run = (ROOT / 'image/s6-overlay/s6-rc.d/watson-cycle/run').read_text()
+        code = [line.strip() for line in run.splitlines() if line.strip() and not line.lstrip().startswith('#')]
+        announce = 'as_agent /opt/hermes/.venv/bin/watson --home "$WATSON_HOME" github announce >/dev/null'
+        # Right after root answers, before the setup check: before init too, and never as root,
+        # whose files in the agent's home would lock the agent out of its own database.
+        self.assertEqual(code[code.index('GH_TOKEN=$($AUTH prepare) || GH_TOKEN=') + 1], announce)
+        functions = run[run.index('as_agent() {'):run.index('\n}\n', run.index('cycle() {')) + 3]
+        with TemporaryDirectory() as tmp:
+            setuid, watson = Path(tmp) / 's6-setuidgid', Path(tmp) / 'watson'
+            setuid.write_text('#!/bin/sh\necho "uid $1"\nshift\nexec "$@"\n')
+            watson.write_text('#!/bin/sh\necho "$*"\nenv | sort\n')
+            setuid.chmod(0o755)
+            watson.chmod(0o755)
+            script = (functions + 'WATSON_HOME=/w GH_TOKEN=ghu_PASS PLOW_AGENT_TOKEN=plow\ncycle\necho ---\n'
+                      + announce.replace('>/dev/null', '') + '\n')
+            out = subprocess.run(['sh', '-c', script.replace('/command/s6-setuidgid', str(setuid))
+                                  .replace('/opt/hermes/.venv/bin/watson', str(watson))],
+                                 capture_output=True, text=True, check=True, timeout=10).stdout
+        passes, told = (part.splitlines() for part in out.split('---\n'))
+        self.assertEqual(passes[:2], ['uid hermes', '--home /w cycle'])
+        self.assertIn('GH_TOKEN=ghu_PASS', passes)
+        self.assertEqual(told[:2], ['uid hermes', '--home /w github announce'])
+        self.assertIn('PLOW_AGENT_TOKEN=plow', told)
+        self.assertEqual([line for line in told if 'ghu_' in line or line.startswith('GH_TOKEN')], [])
 
     def test_shutdown_stops_the_waiter_and_a_failing_auth_never_spins(self):
         run = (ROOT / 'image/s6-overlay/s6-rc.d/watson-cycle/run').read_text()

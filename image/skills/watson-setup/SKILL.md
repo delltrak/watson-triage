@@ -57,10 +57,14 @@ you never see them, `gh` has no credential here, and you never run
 When the owner asks to connect, or says yes to the code:
 
 ```bash
-/opt/hermes/.venv/bin/watson --home /var/lib/hermes/watson github connect
+/opt/hermes/.venv/bin/watson --home /var/lib/hermes/watson github connect --language LANG
 ```
 
-It prints the `github` object of `status`. By `state`:
+`LANG` is `en` or `pt`, the language they write in. Once they approve, Watson
+texts them on its own, within seconds and in that language, that GitHub is
+connected; they do not have to tell you it worked.
+
+The command prints the `github` object of `status`. By `state`:
 
 - `pending`: send `verification_uri` and `user_code` exactly as given, the code
   on a line of its own, and say it expires in `minutes_left` minutes. Tell them
@@ -94,7 +98,8 @@ say it is installed, run `github connect` again: it checks again and lists them.
 ## 2. The repository
 
 Ask which repository to watch from `github.repositories`, numbered in that
-order, and take a number back. With exactly one, propose it by name. With none,
+order, and take a number back; Watson's own message on connecting may already
+have asked, in the same order. With exactly one, propose it by name. With none,
 the install step in section 1 comes first. owner/repo typed out always works
 too, for one the list does not show. Take one. Related repositories can be added
 later; do not ask about them now.
@@ -185,6 +190,11 @@ are answering. `status` has it: `actions[].kind` says what went out, and
 `last_cycle` is the pass behind it. Its `errors`, like `issues[].last_error`,
 are raw text, often in Portuguese: explain them, never paste them.
 
+- `owner_github_notice`: GitHub just connected. Before setup it listed the
+  repositories by number, proposed the only one, or sent the install link; on
+  a configured install it said Watson is back on the repository. Before setup
+  `status` has no `actions`: a bare number from the owner answers this
+  message, and it is that position in `github.repositories` (section 2).
 - `owner_setup_notice`: the setup works — the repository, the login and how
   many issues are open. With none open it asks them to confirm the login; a
   corrected one goes through `config --assignee`.

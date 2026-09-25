@@ -120,10 +120,13 @@ class App:
         except FileNotFoundError:
             return None
 
-    def save(self, answer):
+    def save(self, answer, connected_at):
         # No expires_in: the app is opted out of token expiration, so there is nothing to refresh.
+        # connected_at is when the owner approved, kept through refreshes: the agent
+        # tells them once per connection, and a token saved before it has none.
         tokens = {'access_token': answer['access_token'], 'refresh_token': answer.get('refresh_token'),
-                  'expires_at': self.clock() + answer['expires_in'] if answer.get('expires_in') else None}
+                  'expires_at': self.clock() + answer['expires_in'] if answer.get('expires_in') else None,
+                  'connected_at': connected_at}
         _write(self.token_file, tokens, 0o600)
         return tokens
 
@@ -159,7 +162,7 @@ class App:
                 self.publish({'access_denied': 'denied', 'expired_token': 'expired'}.get(error, 'failed'),
                              detail=error)
                 return None
-            return self.save(answer)
+            return self.save(answer, self.clock())
         self.log('device code expired unused')
         self.publish('expired')
         return None
@@ -195,10 +198,11 @@ class App:
                     self.log(f'refresh refused ({answer["error"]}); the owner has to connect again')
                     self.forget(answer['error'])
                     return None
-                tokens, changed = self.save(answer), True
+                tokens, changed = self.save(answer, tokens.get('connected_at')), True
             if changed:  # the owner's list too, so "I installed it" is answered by connecting again
                 token = tokens['access_token']
-                self.publish('connected', login=self.get('/user', token)['login'], **self.repositories(token))
+                self.publish('connected', login=self.get('/user', token)['login'],
+                             connected_at=tokens.get('connected_at'), **self.repositories(token))
         except urllib.error.HTTPError as exc:
             if exc.code == 401:
                 self.log('GitHub answered 401 (revoked, or lapsed while down); the owner has to connect again')
@@ -213,19 +217,24 @@ class App:
 
     def wait(self, seconds):
         """The pause between passes, answering the owner within seconds meanwhile.
-        It returns only at the tick: a request is answered here, never by starting
-        a pass early, so asking again and again cannot buy extra passes."""
+        A request is answered here, never by starting a pass early, so asking
+        again and again cannot buy extra passes. The one exception is a new
+        connection, which ends the pause so the owner hears of it at once: only
+        approving a code on github.com makes one."""
         end = self.clock() + seconds
         while self.clock() < end:
             if _requested(self.requests) is not None:
+                asked = self.clock()
                 self.prepare()
+                if (read_status(self.status).get('connected_at') or 0) > asked:
+                    return
             self.sleep(2)
 
 
 def describe(status, *, clock=time.time):
     """What the chat may relay: the status without its timestamps, plus the minutes a pending code has left."""
     out = {'state': status.get('state', 'unknown'),
-           **{k: v for k, v in status.items() if k not in {'state', 'expires_at', 'updated_at'}}}
+           **{k: v for k, v in status.items() if k not in {'state', 'expires_at', 'updated_at', 'connected_at'}}}
     if out['state'] == 'pending':
         out['minutes_left'] = max(0, int((status['expires_at'] - clock()) // 60))
     return out
