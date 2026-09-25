@@ -95,13 +95,13 @@ class App:
 
     def repositories(self, token):
         """What the owner picks from: the repositories the app is installed on
-        and they can read, latest push first, by name. Ten installations and a
-        page each is more than one owner has. A list GitHub will not give is
-        left out, and the connection stands."""
+        and they can read, latest push first, by name. One page of 100 an
+        installation is more than one owner has, so the ten are the latest of
+        those. A list GitHub will not give is left out, and the connection stands."""
         try:
             found, count = [], 0
-            for installation in self.get('/user/installations?per_page=100', token)['installations'][:10]:
-                page = self.get(f'/user/installations/{int(installation["id"])}/repositories?per_page=100', token)
+            for installation in self.get('/user/installations?per_page=100', token)['installations']:
+                page = self.get(f'/user/installations/{installation["id"]}/repositories?per_page=100', token)
                 found, count = found + page['repositories'], count + page['total_count']
             found.sort(key=lambda repo: repo['pushed_at'] or '', reverse=True)
             return {'repositories': [{k: repo[k] for k in ('full_name', 'private', 'pushed_at')} for repo in found[:10]],

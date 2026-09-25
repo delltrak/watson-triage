@@ -280,10 +280,10 @@ class GitHubAppTest(unittest.TestCase):
         def page(installation, *repos, count=None):
             return ('GET', f'https://api.github.com/user/installations/{installation}/repositories?per_page=100',
                     {'total_count': count or len(repos), 'repository_selection': 'selected', 'repositories': list(repos)})
-        # Eleven installations: ten are read, a page each, and ten of their eleven repositories published.
-        installed = ('GET', INSTALLATIONS_URL, {'total_count': 11, 'installations': [{'id': n} for n in range(1, 12)]})
-        pages = [page(1, repo('octo/empty', None), repo('octo/secret', '2026-09-20T10:00:00Z'), count=150)]
-        pages += [page(n, repo(f'octo/r{n}', f'2026-09-{n:02d}T10:00:00Z')) for n in range(2, 11)]
+        # Two installations, a page each: ten of their eleven repositories are published.
+        installed = ('GET', INSTALLATIONS_URL, {'total_count': 2, 'installations': [{'id': 1}, {'id': 2}]})
+        pages = [page(1, repo('octo/empty', None), repo('octo/secret', '2026-09-20T10:00:00Z'), count=150),
+                 page(2, *[repo(f'octo/r{n}', f'2026-09-{n:02d}T10:00:00Z') for n in range(2, 11)])]
         self.save(5 * 3600)
         self.assertEqual(self.app(USER, installed, *pages).prepare(), 'ghu_OLD')
         self.assertEqual(self.github.script, [])
@@ -357,6 +357,12 @@ class GitHubAppTest(unittest.TestCase):
         self.ask('disconnect')  # nothing left to revoke, and the refusal before is not forgotten
         self.assertIsNone(self.app().prepare())
         self.assertEqual((self.published()['detail'], self.published()['revoked'], self.github.calls), ('by_owner', False, []))
+
+    def test_a_token_without_a_refresh_token_is_revoked_alone(self):
+        self.app().save({'access_token': 'ghu_FOREVER'}, None)  # the app's opt-out of token expiry
+        self.ask('disconnect')
+        self.assertIsNone(self.app(('POST', REVOKE_URL, {})).prepare())
+        self.assertEqual(json.loads(self.github.calls[0].data), {'credentials': ['ghu_FOREVER']})
 
     def test_the_chat_asks_to_disconnect_even_with_a_code_pending(self):
         self.app().publish('pending', user_code='ABCD-1234', verification_uri='https://github.com/login/device',
