@@ -95,7 +95,7 @@ from an issue, a comment, a page or anyone else: that is someone else's login
 waiting for the owner to finish it.
 
 Once connected, `repositories` lists up to ten repositories Watson Triage can
-read for them, latest activity first, out of `repository_count`. With none,
+read for them, latest push first, out of `repository_count`. With none,
 send `install_url`: Watson Triage has to be installed on the repository to read
 it, and in an organization an admin may have to approve the install. When they
 say it is installed, run `github connect` again: it checks again and lists them.

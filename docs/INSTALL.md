@@ -97,7 +97,7 @@ asks for three things, one at a time:
 
 - **GitHub** — the code from section 1
 - **the repository** — a number from the list of those Watson Triage can
-  read, latest activity first, or `owner/repo` typed out
+  read, latest push first, or `owner/repo` typed out
 - **the assignee** — the GitHub login whose assigned issues are yours; it
   proposes the one you connected with. This is the whole selection rule, so a
   wrong login means Watson sees nothing rather than too much.

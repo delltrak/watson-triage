@@ -27,10 +27,12 @@ you want the recorded evidence.
 [docs/INSTALL.md](INSTALL.md#1-connect-github-in-chat) owns the owner's side.
 The mechanism is the Watson Triage GitHub App's device flow, split by uid:
 
-- The chat, as the agent, runs `watson github connect`. That only creates an
-  empty request file in the agent's home, which root `lstat`s and unlinks but
-  never opens, and reads the answer from `/run/watson-github/status.json`,
-  which root writes and the agent can only read: a state, the login, the
+- The chat, as the agent, runs `watson github connect`. That creates an empty
+  request file in the agent's home, which root `lstat`s and unlinks but never
+  opens (and, given `--language`, a `connect.json` in the Watson home with the
+  language, which root never reads either), and reads the answer from
+  `/run/watson-github/status.json`, which root writes and the agent can only
+  read: a state, the login, the
   install URL, the user code and verification URI while one is pending, and
   once connected the repositories the owner can pick from (name, whether
   private, last push; ten at most, and how many there are). `watson github
