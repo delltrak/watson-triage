@@ -66,10 +66,10 @@ NOTICE={
           'reproduced':'Problem reproduced in the test','validated':'Test scenario passed',
           'blocked':'Validation blocked','triaged':'Triage done','closed':'Issue closed',
           'expected':'Expected','observed':'Observed',
-          'stuck':'Watson: I could not check {numbers} twice in a row, so I will retry them less often. '
-                  'Ask me what went wrong, or tell me to stop tracking them.',
-          'set_up':'Watson is set up: watching {repo} for issues assigned to {assignee}, {count} open now. '
-                   'Those I look at when you name one; issues assigned from now on I pick up on my own.',
+          'stuck':'Watson: I could not check {numbers} twice in a row, so I will try again less often. '
+                  'Ask me what went wrong, or tell me to stop tracking {numbers}.',
+          'set_up':'Watson is set up: watching {repo} for issues assigned to {assignee}. Open now: {count}. '
+                   'An issue already open I look at when you send its number; issues assigned from now on I pick up on my own.',
           'no_issues':'\n\nIf {assignee} is not the right GitHub login, tell me the right one.',
           'refused':{401:"GitHub refused Watson's access to {repo}; it expired or was revoked. Reply and I will reconnect it. "
                          'Until then I am not checking issues.',
@@ -82,9 +82,9 @@ NOTICE={
           'blocked':'Validação bloqueada','triaged':'Triagem concluída','closed':'Issue encerrada',
           'expected':'Esperado','observed':'Observado',
           'stuck':'Watson: não consegui verificar {numbers} duas vezes seguidas, então vou tentar de novo com menos frequência. '
-                  'Me pergunte o que deu errado, ou peça para eu parar de acompanhá-las.',
-          'set_up':'Watson configurado: acompanho {repo}, issues atribuídas a {assignee}, {count} abertas agora. '
-                   'Essas eu olho quando você me disser o número; as atribuídas daqui em diante eu pego sozinho.',
+                  'Me pergunte o que deu errado, ou peça para eu parar de acompanhar {numbers}.',
+          'set_up':'Watson configurado: acompanho {repo}, issues atribuídas a {assignee}. Abertas agora: {count}. '
+                   'Uma issue já aberta eu vejo quando você me mandar o número; as atribuídas daqui em diante eu pego sozinho.',
           'no_issues':'\n\nSe {assignee} não for o login certo no GitHub, me diga o certo.',
           'refused':{401:'O GitHub recusou o acesso do Watson a {repo}; ele expirou ou foi revogado. Responda e eu reconecto. '
                          'Até lá não verifico issues.',
@@ -163,6 +163,11 @@ def cycle(home, *, model=None, github=None, writer=None):
                 number=row['number']
                 try:
                     issue=github.issue(repo,number)
+                    # Read again: the selection is minutes old, and the owner's
+                    # track or untrack does not wait for the pass.
+                    row=store.db.execute('SELECT tracked,explicit,checked FROM issues WHERE repo=? AND number=?',
+                                         (repo,number)).fetchone()
+                    if not row['tracked']: continue
                     if not row['explicit'] and login not in issue['assignees']:
                         store.track(repo,number,False)
                         outcome['skipped'].append({'number':number,'reason':f'no longer assigned to {login}'}); continue
@@ -248,10 +253,10 @@ def cycle(home, *, model=None, github=None, writer=None):
                     outcome['processed'].append({'number':number,'state':state,'run_id':run['run_id'],
                                                 'comment':data.get('comment'),'notification':data.get('notification')})
                 except Exception as exc:
-                    outcome['errors'].append({'number':number,'error':str(exc)[:500]})
+                    error=str(exc)[:500]; outcome['errors'].append({'number':number,'error':error})
                     # Told once per streak, on the second failure in a row; the
                     # last success in the key tells one streak from the next.
-                    if store.failed(repo,number)==2: stuck.append([number,row['checked']])
+                    if store.failed(repo,number,error)==2: stuck.append([number,row['checked']])
             if stuck:
                 tell_owner(store,config,'owner_stuck_notice',{'repo':repo,'stuck':stuck},
                            notice['stuck'].format(numbers=', '.join(f'#{n}' for n,_ in stuck)))

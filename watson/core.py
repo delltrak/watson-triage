@@ -102,25 +102,26 @@ class Store:
         if 'assigned' not in columns:
             self.db.execute('ALTER TABLE issues ADD COLUMN assigned INTEGER DEFAULT 0')
             self.db.execute('UPDATE issues SET assigned=1')
-        for column in ('explicit INTEGER DEFAULT 0', 'failures INTEGER DEFAULT 0', 'retry_at TEXT'):
+        for column in ('explicit INTEGER DEFAULT 0', 'failures INTEGER DEFAULT 0', 'retry_at TEXT', 'last_error TEXT'):
             if column.split()[0] not in columns:
                 self.db.execute(f'ALTER TABLE issues ADD COLUMN {column}')
         self.db.commit()
 
     def checked(self, repo, number):
-        self.db.execute('UPDATE issues SET checked=?,changed=0,failures=0,retry_at=NULL WHERE repo=? AND number=?',
-                        (now(), repo, number))
+        self.db.execute('UPDATE issues SET checked=?,changed=0,failures=0,retry_at=NULL,last_error=NULL '
+                        'WHERE repo=? AND number=?', (now(), repo, number))
         self.db.commit()
 
-    def failed(self, repo, number):
+    def failed(self, repo, number, error=None):
         # 10 minutes, doubling up to a day: a number that keeps failing neither
         # holds a pass's slots nor re-pays inference every pass. `checked` stays
-        # the last success.
+        # the last success; the error stays for the chat, which is asked why
+        # after last-cycle.json has moved on.
         failures = self.db.execute('SELECT failures FROM issues WHERE repo=? AND number=?',
                                    (repo, number)).fetchone()['failures'] + 1
         retry = datetime.now(timezone.utc) + timedelta(seconds=min(600 * 2 ** (failures - 1), 86400))
-        self.db.execute('UPDATE issues SET failures=?,retry_at=? WHERE repo=? AND number=?',
-                        (failures, retry.isoformat(), repo, number))
+        self.db.execute('UPDATE issues SET failures=?,retry_at=?,last_error=? WHERE repo=? AND number=?',
+                        (failures, retry.isoformat(), error, repo, number))
         self.db.commit()
         return failures
 

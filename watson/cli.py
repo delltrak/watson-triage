@@ -4,7 +4,7 @@ import argparse
 import json
 import os
 import sys
-from contextlib import nullcontext
+from contextlib import closing, nullcontext
 from pathlib import Path
 
 from .analysis import PlowInference, render, triage
@@ -129,8 +129,9 @@ def main(argv=None):
         store = Store(args.home)
         # The owner's commands do not wait for a pass, which holds the lock for
         # minutes: "track 123" mid-pass used to fail in chat. A running pass
-        # finishes on the config it loaded.
-        with nullcontext() if args.command in {'track', 'untrack', 'status', 'config'} else store.lock():
+        # finishes on the config it loaded. `show` only reads a finished run.
+        with closing(store.db), \
+                nullcontext() if args.command in {'track', 'untrack', 'status', 'config', 'show'} else store.lock():
             if args.command == 'init':
                 if (args.home / 'config.json').exists():
                     raise WatsonError('Already configured; use watson config to change the repository, login or language.')

@@ -13,7 +13,7 @@ from watson.cli import main, sync
 from watson.core import Store, WatsonError, private_json
 from watson.github import GitHub, GitHubError
 from watson.workflow import NOTICE, cycle
-from test_watson import FakeGitHub, FakeModel, CONFIG
+from test_watson import FakeGitHub, FakeModel, CONFIG, RESULT
 
 
 class Owner:
@@ -95,12 +95,38 @@ class CycleSafetyTests(unittest.TestCase):
         github.items = assigned
         self.assertEqual(sync(store, github, CONFIG)['newly_tracked'], [7])
         self.assertEqual((self.row(7)['tracked'], self.row(7)['explicit']), (1, 0))
+        github.items = []; sync(store, github, CONFIG)  # handed to someone else
+        self.cli('track', '7'); github.items = assigned; sync(store, github, CONFIG)  # named, then handed back
+        self.assertEqual(self.row(7)['explicit'], 1, 'sync cleared the owner-named flag')
 
     def test_owner_commands_do_not_wait_for_a_running_pass(self):
         store = Store(self.home); self.addCleanup(store.db.close)
+        run_id, _ = store.begin('demo/repo', 124, 'fingerprint'); store.finish(run_id, RESULT)  # already reported
         with store.lock():
-            for command in (['track', '124'], ['untrack', '124'], ['status'], ['config', '--assignee', 'pm']):
+            for command in (['track', '124'], ['untrack', '124'], ['status'], ['config', '--assignee', 'pm'],
+                            ['show', str(run_id), '--format', 'json']):
                 self.assertEqual(self.cli(*command), 0, command)
+
+    def pass_where_the_owner_speaks_about_7(self, command, assignees):
+        """#3 and #7 are selected together; while the pass is still on #3, the owner runs `command 7`."""
+        owner_speaks = lambda: self.assertEqual(self.cli(command, '7'), 0)
+        class MidPass(FakeGitHub):
+            said = False
+            def issue(self, repo, number):
+                if number == 3 and not self.said: self.said = True; owner_speaks()
+                return {**copy.deepcopy(self.item), 'number': number, 'assignees': assignees if number == 7 else ['owner']}
+        store = Store(self.home); store.track('demo/repo', 3); store.track('demo/repo', 7); store.db.close()  # as sync does
+        github = MidPass(); github.items = []
+        processed = [p['number'] for p in self.run_cycle(github)['processed']]
+        return processed, [m for m in self.owner.sent if m.startswith('Watson · #7')]
+
+    def test_a_track_made_during_a_pass_is_not_undone_by_it(self):
+        processed, told = self.pass_where_the_owner_speaks_about_7('track', ['dev'])  # "keep following #7"
+        self.assertEqual((processed, len(told)), ([3, 7], 1))
+        self.assertEqual((self.row(7)['tracked'], self.row(7)['explicit']), (1, 1))
+
+    def test_an_untrack_made_during_a_pass_is_honoured_by_it(self):
+        self.assertEqual(self.pass_where_the_owner_speaks_about_7('untrack', ['owner']), ([3], []))
 
     def test_numbers_that_always_fail_neither_starve_the_queue_nor_nag(self):
         github = Numbers()
@@ -115,8 +141,23 @@ class CycleSafetyTests(unittest.TestCase):
         self.run_cycle(github)  # the second failure in a row
         self.assertEqual(self.owner.sent[told:], [NOTICE['en']['stuck'].format(numbers='#5, #6, #7')])
         self.assertNotIn(github.error, self.owner.sent[-1])
-        self.due_now(); self.run_cycle(github)  # the third: already told
+        self.cli('untrack', '6'); self.cli('untrack', '7')  # #5 alone fails a third time: already told
+        self.due_now(); self.run_cycle(github)
         self.assertEqual(len(self.owner.sent), told + 1)
+        for _ in range(2):  # a success ends the streak, and the next one is told again
+            store = Store(self.home); store.checked('demo/repo', 5); store.db.close()
+            for _ in range(2): self.due_now(); self.run_cycle(github)
+        self.assertEqual(self.owner.sent[told + 1:], [NOTICE['en']['stuck'].format(numbers='#5')] * 2)
+
+    def test_why_a_number_is_stuck_outlives_the_pass_that_found_it(self):
+        github = Numbers(); self.cli('track', '5')
+        self.run_cycle(github); self.due_now(); self.run_cycle(github)  # stuck: the owner is told to ask why
+        self.run_cycle(github)  # the next pass, with #5 waiting out its backoff
+        status = self.status()
+        self.assertEqual(status['last_cycle']['errors'], [])
+        self.assertEqual([i['last_error'] for i in status['issues'] if i['number'] == 5], [github.error])
+        store = Store(self.home); store.checked('demo/repo', 5); store.db.close()
+        self.assertIsNone(self.row(5)['last_error'])
 
     def test_the_backoff_doubles_and_is_capped_at_a_day(self):
         store = Store(self.home); self.addCleanup(store.db.close); store.track('demo/repo', 5)
@@ -127,6 +168,8 @@ class CycleSafetyTests(unittest.TestCase):
             waits.append(round((at - before).total_seconds() / 60))
         self.assertEqual(waits, [10, 20, 40, 80, 160, 320, 640, 1280, 1440, 1440])
         store.checked('demo/repo', 5)
+        self.assertEqual((self.row(5)['failures'], self.row(5)['retry_at']), (0, None))
+        store.failed('demo/repo', 5); store.track('demo/repo', 5)  # so does a (re)track
         self.assertEqual((self.row(5)['failures'], self.row(5)['retry_at']), (0, None))
 
     def test_a_failing_triage_is_not_paid_for_every_pass(self):
@@ -145,6 +188,11 @@ class CycleSafetyTests(unittest.TestCase):
         self.assertEqual(github.reads, [], 'issues were read although the repository was refused')
         self.assertEqual(self.owner.sent, [NOTICE['en']['refused'][404].format(repo='demo/repo')])
         self.assertEqual(self.status()['last_cycle']['errors'], [error])
+
+    def test_a_quiet_install_is_told_nothing(self):
+        private_json(self.home / 'config.json', {**CONFIG, 'notify_owner': False})
+        self.run_cycle(Refused(404))
+        self.assertEqual(self.owner.sent, [])
 
     def test_the_same_refusal_is_reported_again_after_a_good_sync(self):
         for github in (Refused(401), FakeGitHub(), Refused(401), Refused(401)): self.run_cycle(github)
