@@ -9,10 +9,13 @@ import threading
 import unittest
 import urllib.error
 import urllib.parse
+from contextlib import redirect_stdout
+from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
-from watson import githubapp
+from watson import cli, githubapp
 from watson.core import WatsonError
 from watson.githubapp import App, connect, describe
 
@@ -265,6 +268,30 @@ class GitHubAppTest(unittest.TestCase):
         self.assertEqual((busy['queued'], request.exists()), (True, True))
         with self.assertRaises(WatsonError):
             connect(status=self.status, requests=self.root / 'missing', wait_s=0, clock=self.clock)
+
+    def test_the_chat_connects_before_init_without_the_store_and_status_shows_github(self):
+        home = self.root / 'watson'
+
+        def run(*argv):
+            with redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(cli.main(['--home', str(home), *argv]), 0)
+            return json.loads(out.getvalue())
+
+        def root_answers(_):
+            self.t += 1
+            self.app().publish('pending', user_code='ABCD-1234', verification_uri='https://github.com/login/device',
+                               expires_at=self.t + 900)
+        chat = partial(connect, status=self.status, requests=self.requests, sleep=root_answers, clock=self.clock)
+        with mock.patch('watson.cli.connect', chat):
+            self.assertEqual(run('github', 'connect')['user_code'], 'ABCD-1234')
+        self.assertTrue((self.requests / githubapp.REQUEST).is_file())
+        self.assertFalse(home.exists())  # no Store: nothing created, and no lock to wait on mid-pass
+        run('init', '--repo', 'octo/repo', '--assignee', 'octocat')
+        self.app().publish('connected', login='octocat')
+        with mock.patch('watson.cli.read_status', partial(githubapp.read_status, self.status)):
+            self.assertEqual(run('status')['github'], {
+                'state': 'connected', 'login': 'octocat',
+                'install_url': 'https://github.com/apps/watson-triage/installations/new'})
 
     def test_describe_leaves_out_the_timestamps(self):
         self.assertEqual(describe({}), {'state': 'unknown'})

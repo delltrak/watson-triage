@@ -97,9 +97,10 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 def post_json(method, url, data=None, headers=None, timeout=45, opener=None):
     """The one HTTPS JSON transport: no redirects, no plaintext, parsed result.
 
-    Both callers here carry the same Plow bearer to the same host, so a second
-    copy of this would be two places for the redirect refusal and the scheme
-    check to disagree.
+    Every caller sends a credential through it -- the Plow bearer for inference
+    and delivery, and root's GitHub tokens in githubapp -- so a second copy of
+    this would be two places for the redirect refusal and the scheme check to
+    disagree.
     """
     if urlparse(url).scheme != 'https':
         raise WatsonError('O transporte exige HTTPS.')

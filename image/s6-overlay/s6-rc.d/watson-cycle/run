@@ -14,19 +14,19 @@ PATH=/command:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
 export PATH
 
 WATSON_HOME=/var/lib/hermes/watson
-STASH=/opt/plow/watson-github
+# The owner's GitHub tokens for the Watson Triage app, in a directory root owns
+# 0700, outside the agent's home. Only $AUTH, run here as root, touches it.
+STORE=/var/lib/watson-github
+AUTH='/opt/hermes/.venv/bin/python3 -I -m watson.githubapp'
 
-# The token is read here, as root, from a file mounted read-only at $STASH --
-# never from the container environment, and never from a file the agent writes.
-#
-# All three of those are load-bearing, and each closed a different path the
-# credential took into model context. An agent-written file sourced here was
-# arbitrary root execution one prompt injection away. A token the agent had to
-# be TOLD, in order to write that file, was disclosed to the inference provider
-# the moment it was said. And a token in the container environment is one
-# `printenv` from the gateway's shell, which shares this container -- which is
-# why it is mounted rather than passed through `env_file`: it never enters that
-# environment at all, so nothing has to remember to remove it.
+# The token never comes from the container environment, from a file the agent
+# writes, or from the conversation. Each of those once put a credential in
+# model context: an agent-written file sourced here was root execution one
+# prompt injection away, a token the owner had to type reached the inference
+# provider the moment it was said, and anything in the container environment
+# is one `printenv` from the gateway's shell, which shares this container. The
+# owner approves a device code at github.com instead; the code is not a
+# secret, and the tokens stay root's.
 #
 # HOME is an empty directory root owns, never the agent's: `gh` reads
 # $HOME/.config/gh/config.yml, and an `http_unix_socket` the agent wrote there
@@ -38,7 +38,8 @@ STASH=/opt/plow/watson-github
 #
 # Residual, named here and in issue #2: the child below runs as `hermes`, the
 # gateway's own uid, so its /proc entry -- the token with it -- is readable for
-# as long as a pass runs: minutes when an issue changed.
+# as long as a pass runs: minutes when an issue changed. That is the access
+# token alone; the refresh token never leaves $AUTH.
 cycle() {
   /command/s6-setuidgid hermes env -i \
     PATH="$PATH" HOME=/opt/watson/cycle-home \
@@ -65,50 +66,47 @@ cycle() {
 # it is killed in stays `sending`, because the handler that records `unknown`
 # never runs. `exit 0` is deferred until the foreground child returns:
 # immediate while idle, after the pass while one is running.
-trap 'exit 0' TERM INT
+#
+# Idle is a backgrounded $waiter, and the trap stops it as well: s6 signals only
+# this script, and a waiter left behind would go on answering the owner and
+# refreshing the token beside the loop that replaces this one.
+trap 'kill $waiter 2>/dev/null; exit 0' TERM INT
+
+# Ten minutes, backgrounded and waited rather than in the foreground: a trap
+# does not interrupt a foreground child, so shutdown would stall until the
+# grace period SIGKILLed us. `wait` returns as soon as the handler runs.
+# Meanwhile $AUTH answers a connect request within seconds, and still returns
+# only at the tick, so asking again buys no pass. If it fails instead -- an
+# image built without the app, say, which it reports -- the rest is a plain
+# sleep, so the loop never spins.
+pause() {
+  $AUTH wait 600 & waiter=$!
+  wait $waiter && return
+  /bin/sleep 600 & waiter=$!
+  wait $waiter || true
+}
 
 while :; do
-  # Tested by doing, not by reading the mode. A bind mount's permissions are
-  # the HOST's, and two ordinary situations hand the token to the agent with
-  # `stat` still reporting root:root 0600:
-  #
-  #   - Docker Desktop on macOS does not enforce the mode at all;
-  #   - a Linux host whose operator uid happens to be 10000 maps the file onto
-  #     `hermes` itself, where 0600 is exactly the wrong owner.
-  #
-  # The second is a real deployment, not a developer's laptop, which is why
-  # this refuses rather than warns: the cycle's whole job is reading issue text
-  # written by strangers, and running it means doing that with a repository
-  # credential the model can read. Nothing here is worth that.
-  if [ -f "$STASH" ] && /command/s6-setuidgid hermes test -r "$STASH"; then
-    echo "watson-cycle: REFUSING to run -- the agent's own uid can read $STASH," >&2
-    echo "so a prompt injection could read the GitHub token. The file must be" >&2
-    echo "root-owned on the HOST -- see \"Give it a GitHub token\" in" >&2
-    echo "docs/INSTALL.md. On Docker Desktop for macOS there is no fix: it does" >&2
-    echo "not enforce mounted file modes at all, so run on a Linux host." >&2
-    /bin/sleep 600 & wait $! || true
+  # Tested by doing, not by reading the mode. If the agent's uid can so much as
+  # enter $STORE -- a host directory mounted over it, say, and Docker Desktop on
+  # macOS enforces no mode there at all -- a prompt injection can read the
+  # tokens or plant a link for root to write through. So this refuses before
+  # $AUTH has put anything there, and pauses with a plain sleep, which answers
+  # no connect request.
+  if /command/s6-setuidgid hermes test -x "$STORE"; then
+    echo "watson-cycle: REFUSING to run -- the agent's own uid can enter $STORE," >&2
+    echo "so a prompt injection could read the GitHub tokens. Mount nothing there." >&2
+    /bin/sleep 600 & waiter=$!; wait $waiter || true
     continue
   fi
 
-  GH_TOKEN=$(cat "$STASH" 2>/dev/null || true)
+  # As root: answer the owner's connect request, refresh a token near expiry --
+  # here, between passes, because a refresh retires the token it replaces at
+  # once -- and print the access token for this pass, or nothing.
+  GH_TOKEN=$($AUTH prepare) || GH_TOKEN=
   if [ -z "$GH_TOKEN" ]; then
-    # Stand down rather than guess -- and say the thing the operator has to
-    # DO. This message is the recovery path, so it names the current
-    # mechanism: a raw-token file mounted at $STASH, not an environment
-    # variable. The hosted path waits on issue #2.
-    # No commands here. This message is read by whoever is looking at the
-    # logs, which is not always the operator, and a recipe containing a
-    # credential is one somebody pastes with the token inline -- into their
-    # shell history, or into a ticket. It points at the doc instead, and it
-    # distinguishes the two ways to arrive here, because the fixes differ.
-    echo "watson-cycle: no GitHub token at $STASH -- standing down." >&2
-    if [ -n "$AGENT_ID" ] && [ ! -e "$STASH" ]; then
-      echo "Hosted deploy: it injects only the PLOW_* variables, so there is no" >&2
-      echo "hook for this credential yet. Nothing to fix here -- run under compose." >&2
-    else
-      echo "Local compose: provision it per \"Give it a GitHub token\"." >&2
-    fi
-    /bin/sleep 600 & wait $! || true
+    echo "watson-cycle: GitHub is not connected -- standing down; the owner connects it in chat" >&2
+    pause
     continue
   fi
 
@@ -116,7 +114,7 @@ while :; do
     # Not an error: a fresh agent has not been through watson-setup yet, and
     # there is nothing here to poll for -- the owner finishes it in chat.
     echo "watson-cycle: not configured yet; the owner runs watson-setup in chat" >&2
-    /bin/sleep 600 & wait $! || true
+    pause
     continue
   fi
 
@@ -129,10 +127,5 @@ while :; do
   # is an ordinary outcome: one unreadable issue must not respawn this service,
   # and a crashing longrun is respawned in a tight loop.
   cycle || echo "watson-cycle: pass reported errors; see its JSON above" >&2
-  # Backgrounded and waited, not a plain `sleep`: a trap does not interrupt a
-  # foreground child, so a plain sleep would run its full 600s after SIGTERM
-  # and shutdown would stall until the grace period SIGKILLed us -- mid-pass,
-  # which is the window this whole trap exists to close. `wait` returns as soon
-  # as the handler runs.
-  /bin/sleep 600 & wait $! || true
+  pause
 done

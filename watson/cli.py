@@ -10,6 +10,7 @@ from pathlib import Path
 from .analysis import PlowInference, render, triage
 from .core import Store, WatsonError, load_config, login, now, private_json, repo_name
 from .delivery import Plow, deliver
+from .githubapp import connect, describe, read_status
 from .speech import generate_voice
 from .github import GitHub
 
@@ -71,6 +72,8 @@ def main(argv=None):
     metrics_mode.add_argument('--register', action='store_true')
     metrics_mode.add_argument('--dry-run', action='store_true')
     sub.add_parser('mcp', help='Ponte stdio para Hermes; sem ferramentas de envio ou escrita GitHub.')
+    github = sub.add_parser('github', help='Connect GitHub by a code the owner approves at github.com; never a token.')
+    github.add_argument('action', choices=['connect'])
     watch = sub.add_parser('watch', help='Uma rodada; não instala agendamento nem envia mensagens.')
     watch.add_argument('--once', action='store_true', required=True)
     watch.add_argument('--limit', type=int, default=3)
@@ -109,6 +112,11 @@ def main(argv=None):
         if args.command == 'mcp':
             from .mcp import serve
             serve(args.home)
+            return 0
+        if args.command == 'github':
+            # No Store and no lock: this only asks root and reads its answer, so
+            # it runs before init, and during a pass it reports `queued`.
+            print(json.dumps(connect(), ensure_ascii=False, indent=2))
             return 0
         store = Store(args.home)
         # The owner's commands do not wait for a pass, which holds the lock for
@@ -173,7 +181,8 @@ def main(argv=None):
                             store.track(config['repository'], row['number'], False)
                 elif args.command == 'status':
                     last = args.home / 'last-cycle.json'
-                    output = {'config': config, 'last_cycle': json.loads(last.read_text()) if last.exists() else None,
+                    output = {'github': describe(read_status()), 'config': config,
+                              'last_cycle': json.loads(last.read_text()) if last.exists() else None,
                               **store.history()}
                 elif args.command in {'show', 'voice'}:
                     run = store.run(args.run_id)
