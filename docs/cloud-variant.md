@@ -118,8 +118,14 @@ The residuals this page will not overstate away:
   check that holds. The skill and INSTALL.md both say so.
 
 Two things on the hosted path are not verified yet: that its `PLOW_API_BASE` is
-`https`, which every Plow call here requires, and that `/var/lib/watson-github`
-survives a `plow-agents deploy` of a new image. If it does not, the owner
+`https`, which every Plow call here requires, and whether `/var/lib/watson-github`
+survives a `plow-agents deploy` on the hosted Plow infrastructure.
+
+For the `--local` deployment path using Docker Compose, `/var/lib/watson-github`
+is mounted as a named volume (`watson-github`), which persists across container
+restarts and image updates. The owner does not need to reconnect GitHub after
+`docker compose up -d --build` or `plow-agents deploy --local` of a new image.
+On hosted Plow, if the volume does not persist across deploys, the owner
 connects again after an update; the store does not move into the agent's home
 to avoid that.
 

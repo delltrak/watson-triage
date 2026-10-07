@@ -78,10 +78,13 @@ plow-agents agents         # until the status is `running`
 ```
 
 `--local` builds the image here and brings compose up, which is why it runs
-from this checkout. The GitHub tokens go in a named volume, which takes the
-image's root-only mode on first mount, Docker Desktop on macOS included. Do not
-swap it for a host directory: the cycle refuses to run when the agent can enter
-the store, and on macOS it can.
+from this checkout. The GitHub tokens go in a named volume (`watson-github` in
+`compose.yml`), which takes the image's root-only mode on first mount, Docker
+Desktop on macOS included. **This volume persists across image updates** — when
+you redeploy with `docker compose up -d --build` or `plow-agents deploy --local`,
+the GitHub connection remains intact. Only `docker compose down -v` erases it.
+Do not swap it for a host directory: the cycle refuses to run when the agent can
+enter the store, and on macOS it can.
 
 The hosted path takes a published digest instead -- `plow-agents image show
 watson-delltrak --jq .plow.image` is a public read that prints the reference
