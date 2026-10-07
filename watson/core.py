@@ -42,6 +42,33 @@ def login(value):
     return value
 
 
+def parse_issue_reference(value, default_repo=None):
+    """Parse an issue reference: URL, owner/repo#N, or bare number.
+    
+    Returns (repo, number) tuple. Raises WatsonError if invalid.
+    """
+    # GitHub issue URL: https://github.com/owner/repo/issues/123
+    url_match = re.match(r'https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/(\d+)', value)
+    if url_match:
+        return url_match.group(1), int(url_match.group(2))
+    
+    # owner/repo#123 format
+    short_match = re.match(r'([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)$', value)
+    if short_match:
+        return short_match.group(1), int(short_match.group(2))
+    
+    # Bare number - requires default_repo
+    if re.match(r'^\d+$', value):
+        number = int(value)
+        if number < 1:
+            raise WatsonError('Invalid issue number.')
+        if not default_repo:
+            raise WatsonError('Issue number requires a configured repository.')
+        return default_repo, number
+    
+    raise WatsonError('Invalid issue reference. Use a number, owner/repo#N, or a GitHub issue URL.')
+
+
 def safe_source(path):
     parts = Path(path).parts
     return (bool(parts) and not path.startswith('/') and '..' not in parts

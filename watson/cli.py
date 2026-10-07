@@ -8,7 +8,7 @@ from contextlib import closing, nullcontext
 from pathlib import Path
 
 from .analysis import PlowInference, render, triage
-from .core import Store, WatsonError, load_config, login, now, private_json, repo_name
+from .core import Store, WatsonError, load_config, login, now, parse_issue_reference, private_json, repo_name
 from .delivery import Plow, deliver
 from .githubapp import describe, read_status, request
 from .speech import generate_voice
@@ -58,7 +58,7 @@ def main(argv=None):
     init.add_argument('--language', choices=['en', 'pt'], default='en',
                       help="The language of the messages Watson sends the owner on its own.")
     for cmd in ('track', 'untrack', 'triage'):
-        sub.add_parser(cmd).add_argument('number', type=int)
+        sub.add_parser(cmd).add_argument('issue', help='Issue number, owner/repo#N, or GitHub issue URL')
     sub.add_parser('sync')
     conf = sub.add_parser('config', help='Change the repository, login or language of a configured install.')
     conf.add_argument('--repo')
@@ -156,10 +156,11 @@ def main(argv=None):
                 config = load_config(args.home)
                 github = GitHub([config['repository']] + config['related_repositories'])
                 if args.command in {'track', 'untrack'}:
-                    if args.number < 1:
-                        raise WatsonError('Invalid issue number.')
-                    store.track(config['repository'], args.number, args.command == 'track', explicit=True)
-                    output = {'number': args.number, 'tracked': args.command == 'track'}
+                    repo, number = parse_issue_reference(args.issue, config['repository'])
+                    if repo != config['repository'] and repo not in config.get('related_repositories', []):
+                        raise WatsonError(f'Issue is from {repo}, which is not the configured repository or a related one.')
+                    store.track(repo, number, args.command == 'track', explicit=True)
+                    output = {'repository': repo, 'number': number, 'tracked': args.command == 'track'}
                 elif args.command == 'sync':
                     output = sync(store, github, config)
                 elif args.command == 'config':
@@ -178,9 +179,12 @@ def main(argv=None):
                     # `voice` and `deliver` need no inference, and constructing
                     # it eagerly made an absent or malformed plow_credential_file
                     # fail commands that never touch the model.
+                    repo, number = parse_issue_reference(args.issue, config['repository'])
+                    if repo != config['repository']:
+                        raise WatsonError(f'Can only triage issues from the configured repository {config["repository"]}, not {repo}.')
                     output = triage(store, github,
                                     PlowInference.from_config(args.home, config),
-                                    config, args.number)
+                                    config, number)
                 elif args.command == 'watch':
                     if not 1 <= args.limit <= 20:
                         raise WatsonError('O limite deve ficar entre 1 e 20.')
