@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from watson.analysis import RESULT_SCHEMA, triage, validate_result
 from watson.cli import sync
-from watson.core import Store, WatsonError, safe_source
+from watson.core import Store, WatsonError, parse_issue_reference, safe_source
 from watson.delivery import Plow, deliver
 from watson.github import GitHub
 
@@ -200,6 +200,71 @@ class WatsonTests(unittest.TestCase):
         self.assertEqual(Plow.from_config({'plow_credential_file': str(path)}).token, 'test-token')
         path.write_text('PLOW_API_BASE=https://attacker.example\nPLOW_AGENT_TOKEN=test-token\n')
         with self.assertRaises(WatsonError): Plow.from_config({'plow_credential_file': str(path)})
+
+    def test_parse_issue_reference_accepts_bare_number(self):
+        repo, number = parse_issue_reference('123', 'owner/repo')
+        self.assertEqual(repo, 'owner/repo')
+        self.assertEqual(number, 123)
+
+    def test_parse_issue_reference_accepts_github_url(self):
+        repo, number = parse_issue_reference('https://github.com/owner/repo/issues/456', None)
+        self.assertEqual(repo, 'owner/repo')
+        self.assertEqual(number, 456)
+
+    def test_parse_issue_reference_accepts_short_form(self):
+        repo, number = parse_issue_reference('other/project#789', None)
+        self.assertEqual(repo, 'other/project')
+        self.assertEqual(number, 789)
+
+    def test_parse_issue_reference_rejects_wrong_repo(self):
+        from watson.cli import main
+        with tempfile.TemporaryDirectory() as folder:
+            main(['--home', folder, 'init', '--repo', 'demo/repo', '--assignee', 'owner'])
+            result = main(['--home', folder, 'track', 'https://github.com/other/repo/issues/1'])
+            self.assertNotEqual(result, 0)
+
+    def test_track_by_url_works_for_configured_repo(self):
+        from watson.cli import main
+        with tempfile.TemporaryDirectory() as folder:
+            main(['--home', folder, 'init', '--repo', 'demo/repo', '--assignee', 'owner'])
+            result = main(['--home', folder, 'track', 'https://github.com/demo/repo/issues/123'])
+            self.assertEqual(result, 0)
+
+    def test_watson_usage_namespaced_to_prevent_collision(self):
+        """Watson's usage is namespaced to prevent collision with gateway usage."""
+        import sqlite3
+        from watson.metrics import record_usage
+        usage = [{'input_tokens': 100, 'cached_input_tokens': 0, 'output_tokens': 50}]
+        record_usage(self.home, 'test-label', 'z-ai/glm-5.2', usage)
+        
+        conn = sqlite3.connect(self.home / 'metrics' / 'state.db')
+        rows = conn.execute('SELECT model FROM session_model_usage').fetchall()
+        conn.close()
+        
+        # The model name should be namespaced to 'watson/z-ai/glm-5.2'
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][0], 'watson/z-ai/glm-5.2')
+
+    def test_two_watson_reports_same_model_do_not_collide(self):
+        """Two Watson reports on the same day with the same model create separate rows."""
+        import sqlite3
+        from watson.metrics import record_usage
+        usage1 = [{'input_tokens': 100, 'cached_input_tokens': 0, 'output_tokens': 50}]
+        usage2 = [{'input_tokens': 200, 'cached_input_tokens': 0, 'output_tokens': 75}]
+        
+        record_usage(self.home, 'test-1', 'z-ai/glm-5.2', usage1)
+        record_usage(self.home, 'test-2', 'z-ai/glm-5.2', usage2)
+        
+        conn = sqlite3.connect(self.home / 'metrics' / 'state.db')
+        rows = conn.execute('SELECT model, input_tokens, output_tokens FROM session_model_usage ORDER BY input_tokens').fetchall()
+        conn.close()
+        
+        # Both reports should be present with namespaced model
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0][0], 'watson/z-ai/glm-5.2')
+        self.assertEqual(rows[0][1], 100)
+        self.assertEqual(rows[1][0], 'watson/z-ai/glm-5.2')
+        self.assertEqual(rows[1][1], 200)
 
 
 if __name__ == '__main__':

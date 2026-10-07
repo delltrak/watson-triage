@@ -6,7 +6,7 @@ import os
 import re
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -22,10 +22,51 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
+LANGUAGE_NAMES = {'en': 'English', 'pt': 'Brazilian Portuguese'}
+
+
+def owner_language(config):
+    # The one reader: a config written before languages, or any other value, is English.
+    return 'pt' if config.get('language') == 'pt' else 'en'
+
+
 def repo_name(value):
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value):
-        raise WatsonError("Repositório inválido; use owner/repo.")
+        raise WatsonError('Invalid repository; use owner/repo.')
     return value
+
+
+def login(value):
+    if not re.fullmatch(r'[A-Za-z0-9-]{1,39}', value):
+        raise WatsonError('Invalid GitHub login.')
+    return value
+
+
+def parse_issue_reference(value, default_repo=None):
+    """Parse an issue reference: URL, owner/repo#N, or bare number.
+    
+    Returns (repo, number) tuple. Raises WatsonError if invalid.
+    """
+    # GitHub issue URL: https://github.com/owner/repo/issues/123
+    url_match = re.match(r'https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/(\d+)', value)
+    if url_match:
+        return url_match.group(1), int(url_match.group(2))
+    
+    # owner/repo#123 format
+    short_match = re.match(r'([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)$', value)
+    if short_match:
+        return short_match.group(1), int(short_match.group(2))
+    
+    # Bare number - requires default_repo
+    if re.match(r'^\d+$', value):
+        number = int(value)
+        if number < 1:
+            raise WatsonError('Invalid issue number.')
+        if not default_repo:
+            raise WatsonError('Issue number requires a configured repository.')
+        return default_repo, number
+    
+    raise WatsonError('Invalid issue reference. Use a number, owner/repo#N, or a GitHub issue URL.')
 
 
 def safe_source(path):
@@ -55,7 +96,7 @@ def load_config(home):
     try:
         config = json.loads((home / 'config.json').read_text())
     except FileNotFoundError:
-        raise WatsonError('Execute watson init primeiro.') from None
+        raise WatsonError('Watson is not configured yet; run watson init first.') from None
     repo_name(config['repository'])
     for repo in config.get('related_repositories', []):
         repo_name(repo)
@@ -88,11 +129,28 @@ class Store:
         if 'assigned' not in columns:
             self.db.execute('ALTER TABLE issues ADD COLUMN assigned INTEGER DEFAULT 0')
             self.db.execute('UPDATE issues SET assigned=1')
+        for column in ('explicit INTEGER DEFAULT 0', 'failures INTEGER DEFAULT 0', 'retry_at TEXT', 'last_error TEXT'):
+            if column.split()[0] not in columns:
+                self.db.execute(f'ALTER TABLE issues ADD COLUMN {column}')
         self.db.commit()
 
     def checked(self, repo, number):
-        self.db.execute('UPDATE issues SET checked=?,changed=0 WHERE repo=? AND number=?', (now(), repo, number))
+        self.db.execute('UPDATE issues SET checked=?,changed=0,failures=0,retry_at=NULL,last_error=NULL '
+                        'WHERE repo=? AND number=?', (now(), repo, number))
         self.db.commit()
+
+    def failed(self, repo, number, error=None):
+        # 10 minutes, doubling up to a day: a number that keeps failing neither
+        # holds a pass's slots nor re-pays inference every pass. `checked` stays
+        # the last success; the error stays for the chat, which is asked why
+        # after last-cycle.json has moved on.
+        failures = self.db.execute('SELECT failures FROM issues WHERE repo=? AND number=?',
+                                   (repo, number)).fetchone()['failures'] + 1
+        retry = datetime.now(timezone.utc) + timedelta(seconds=min(600 * 2 ** (failures - 1), 86400))
+        self.db.execute('UPDATE issues SET failures=?,retry_at=?,last_error=? WHERE repo=? AND number=?',
+                        (failures, retry.isoformat(), error, repo, number))
+        self.db.commit()
+        return failures
 
     @contextmanager
     def lock(self):
@@ -102,7 +160,7 @@ class Store:
             try:
                 fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
-                raise WatsonError('Outra triagem do Watson está em execução.') from None
+                raise WatsonError('Another Watson pass is running; try again in a few minutes.') from None
             try:
                 yield
             finally:
@@ -120,10 +178,15 @@ class Store:
                             (issue['title'], observed, repo, number))
         self.db.commit()
 
-    def track(self, repo, number, enabled=True):
-        self.db.execute('''INSERT INTO issues(repo,number,title,tracked,changed) VALUES(?,?,?,?,?)
-            ON CONFLICT(repo,number) DO UPDATE SET tracked=excluded.tracked,changed=excluded.changed''',
-                        (repo, number, f'#{number}', int(enabled), int(enabled)))
+    def track(self, repo, number, enabled=True, explicit=False):
+        # An owner's track is followed whoever the issue is assigned to; an
+        # assignment-driven one never clears that, and any untrack does. Every
+        # (re)track restarts the backoff.
+        self.db.execute('''INSERT INTO issues(repo,number,title,tracked,changed,explicit) VALUES(?,?,?,?,?,?)
+            ON CONFLICT(repo,number) DO UPDATE SET tracked=excluded.tracked,changed=excluded.changed,
+              explicit=CASE WHEN excluded.tracked THEN MAX(explicit,excluded.explicit) ELSE 0 END,
+              failures=0,retry_at=NULL''',
+                        (repo, number, f'#{number}', int(enabled), int(enabled), int(explicit and enabled)))
         self.db.commit()
 
     def latest(self, repo, number):
@@ -161,6 +224,10 @@ class Store:
         if not row:
             raise WatsonError('Investigação não encontrada.')
         return dict(row)
+
+    def claimed(self, run_id, kind, payload):
+        return self.db.execute('SELECT 1 FROM actions WHERE key=?',
+                               (digest({'run': run_id, 'kind': kind, 'payload': payload}),)).fetchone() is not None
 
     def claim_action(self, run_id, kind, payload):
         key = digest({'run': run_id, 'kind': kind, 'payload': payload})
