@@ -13,6 +13,13 @@ from .core import private_json
 
 
 def record_usage(home, label, model, usage):
+    """Record Watson's own inference usage with a namespaced model name.
+    
+    Watson's inference usage is reported separately from the Hermes gateway's usage.
+    To prevent collision on the Index's (agent, user, date, model) upsert key,
+    we prefix the model name with 'watson/' so Watson's glm-5.2 usage does not
+    overwrite the gateway's glm-5.2 row for the same day.
+    """
     folder=Path(home)/'metrics'; folder.mkdir(parents=True,exist_ok=True,mode=0o700)
     invocation=uuid.uuid4().hex; at=time.time()
     # Keep independent attempts rather than overwrite a run's audit file.
@@ -25,8 +32,10 @@ def record_usage(home, label, model, usage):
     cached=sum(max(0,int(u.get('cached_input_tokens',0))) for u in usage)
     output=sum(max(0,int(u.get('output_tokens',0))) for u in usage)
     # input_tokens includes the cached part (see normalize_usage). The Index sums these categories.
+    # Namespace the model name to isolate Watson's usage from the gateway's usage.
+    namespaced_model = f'watson/{model}' if not model.startswith('watson/') else model
     conn.execute('INSERT INTO session_model_usage VALUES(?,?,?,?,?,?,?,?)',
-                 (invocation,model,max(0,total-cached),output,min(cached,total),0,at,at))
+                 (invocation,namespaced_model,max(0,total-cached),output,min(cached,total),0,at,at))
     conn.commit(); conn.close()
 
 
